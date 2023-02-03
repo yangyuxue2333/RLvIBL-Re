@@ -2,3 +2,5 @@
 /*/*/.ipynb_checkpoints/
 /*/__old__/
 /data/*
+script/__pycache__
+/.idea
