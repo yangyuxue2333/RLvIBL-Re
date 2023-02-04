@@ -22,9 +22,11 @@ As a task, we are using the "Incentive Processing" task of the Human Connectome 
 
 ### Code Location
 
-source codes are located in `./script`
-analysis codes are located in `./analysis`
-data are in `./data`
+* Source codes are located in `./script`
+
+* Analysis codes are located in `./analysis`
+
+* Data are in `./data`
 
 ### Run simulation
 
@@ -76,23 +78,38 @@ Examine the correlation between P and P'
 
 
 A simple way: Go to `/script`, run python script
-    
-    python -m run_pr
 
+Run one simulation for each participant using the best fit parameter set
+ 
+    python -m run_pr_best
+
+Run one simulation for each participant with random combination of parameter
+    
+- ans = [0.05, 0.2, 0.3, 0.4, 0.5]
+- bll = [.2, .5, .8]
+- lf = [0.1]
+- egs =  [0.05, 0.2, 0.3, 0.4, 0.5]
+- alpha = [.2, .5, .8]
+- r = [0.1]
+  
+
+    python -m run_pr
 
 ---
 ## Data
 
-Subejct data and simulation results are saved in data director
+Subject data and simulation results are saved in data director
 
-- `gambling_trials`: contain the stimuli order sequence for each subject
+- `data/gambling_trials`: contain the stimuli order sequence for each subject
 
-- `model_output_local`: contains the grid-search model simulation outputs
+- `data/model_output_local`: contains the grid-search model simulation outputs
 
-- `subject_data`:contains HCP subject data (reformatted) 
-    - `aggregate`: subject data aggregated by BlockType and Trial Type
-    - `likelihood`: model1 and model2 simulation data aggregated by same grouping var
-    - `maxll`: contains highest maxLL for each model and some intermediate steps
-        - MODEL1.csv contains LL for all parameters 
-        - MODEL1-maxLL.csv contains beh patterns for the best fit parameter
+- `data/subject_data`:contains HCP subject data (reformatted)
+    - `subject.csv`: reformat version of subject beh data
+    - `100307_fnca/aggregate`: subject data aggregated by BlockType and Trial Type
+    - `100307_fnca/likelihood`: model1 and model2 simulation data aggregated by same grouping var
+    - `100307_fnca/maxll`: contains highest maxLL for each model and some intermediate steps
+        - `/MODEL1.csv`: contains LL for all parameters 
+        - `/MODEL1-maxLL.csv`: contains beh patterns for the best fit parameter
+        - `/MODEL1-100307_fnca-merged.csv`: intermediate outputs. merged dataframe between model + subejct
     

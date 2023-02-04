@@ -10,18 +10,26 @@ import warnings
 warnings.filterwarnings('ignore')
 
 MAXLL_FACTOR_VAR = ['BlockType', 'TrialType']
+# MAXLL_FACTOR_VAR = ['TrialType']
+MAXLL_EXCLUDE_NEUTRAl = False
 ACTR_PARAMETER_NAME = {'model1': ['ans', 'bll', 'lf'], 'model2':['egs', 'alpha', 'r']}
 
 #----------------------------------------#
 # RUN SIMULATION
 #----------------------------------------#
 
-def simulate(epoch, subject_id, param_id, model, param_set, verbose, log_dir, special_suffix="", overwrite=True):
+def simulate(epoch, subject_id, param_id, model, param_set, verbose, log_dir, special_suffix="", overwrite=False):
     """
     Run simulation
     """
+    parent_dir = os.path.dirname(os.getcwd())
     model_dat_list = []
     for i in range(epoch):
+        #check if exists 2 files MODEL1.csv MODEL2.csv
+        dest_dir = os.path.join(parent_dir, log_dir, subject_id, param_id)
+        if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=2, overwrite=overwrite):
+            if verbose: print('...SKIP: ALREADY SIM DATA ... [%s] [%s]' % (subject_id, param_id))
+            continue
         g = GambleTask()
         g.setup(model=model,
                 param_set=param_set,
@@ -37,13 +45,19 @@ def simulate(epoch, subject_id, param_id, model, param_set, verbose, log_dir, sp
             model_dat[param_name] = g.get_parameter(param_name)
         model_dat_list.append(model_dat)
 
-    df_model = pd.concat(model_dat_list, axis=0)
+    # if all being simulated
+    # skip
+    try:
+        df_model = pd.concat(model_dat_list, axis=0)
+    except:
+        return
 
     # process response switch
     df_model = process_model_data(df=df_model, model=model)
 
     if log_dir:
-        save_simulation_data(log_dir=log_dir,
+        save_simulation_data(main_dir=parent_dir,
+                       log_dir=log_dir,
                        subject_id=subject_id,
                        param_id=param_id,
                        df_model=df_model,
@@ -51,22 +65,16 @@ def simulate(epoch, subject_id, param_id, model, param_set, verbose, log_dir, sp
                        verbose=verbose,
                        overwrite=overwrite)
 
-def save_simulation_data(log_dir, subject_id, param_id, df_model, special_suffix, verbose, overwrite):
+def save_simulation_data(main_dir, log_dir, subject_id, param_id, df_model, special_suffix, verbose, overwrite):
     """
     Save samulation data
     """
-    parent_dir = os.path.dirname(os.getcwd())
-
-    # calculate aggregate data
-    df_model['HCPID'] = subject_id
-    model = df_model['model'].unique()[0]
-    group_var = ['HCPID'] + MAXLL_FACTOR_VAR + ACTR_PARAMETER_NAME[model]
-    df_agg = df_model.groupby(group_var).agg({'ResponseSwitch': 'mean'}).reset_index()
-
     ### MODEL SIMULATION DATA
     # dest_dir = os.path.join(parent_dir, log_dir, subject_id)
-    dest_dir = os.path.join(parent_dir, log_dir, subject_id, param_id)
+    dest_dir = os.path.join(main_dir, log_dir, subject_id, param_id)
     log_path = os.path.join(dest_dir, actr.current_model() + special_suffix + ".csv")
+
+    df_model['HCPID'] = subject_id
 
     # check exist
     if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=2, overwrite=overwrite):
@@ -78,19 +86,26 @@ def save_simulation_data(log_dir, subject_id, param_id, df_model, special_suffix
         df_model.to_csv(log_path, header=True, index=True, mode='w')
     if verbose: print("...COMPLETE SIMULATION...\n")
 
+def save_simulation_aggregate_data(main_dir, log_dir, subject_id, param_id, model, special_suffix, verbose, overwrite):
+    """
+    Save simulation aggregate data
+    """
     ### SIMULATION AGG DATA
-    dest_agg_dir = os.path.join(os.path.join(dest_dir, 'aggregate'))
-    agg_path = os.path.join(dest_agg_dir, actr.current_model() + special_suffix + ".csv")
+    # calculate aggregate data
+    df_model = pd.read_csv(os.path.join(main_dir, log_dir, subject_id, param_id, str.upper(model) + '.csv'), index_col=0)
+    group_var = ['HCPID'] + MAXLL_FACTOR_VAR + ACTR_PARAMETER_NAME[model]
+    df_agg = df_model.groupby(group_var).agg({'ResponseSwitch': 'mean'}).reset_index()
+
+    # define path
+    dest_agg_dir = os.path.join(os.path.join(main_dir, log_dir, subject_id, param_id, 'aggregate'))
+    agg_path = os.path.join(dest_agg_dir,  str.upper(model)  + special_suffix + ".csv")
 
     # check exist
     if check_exists_simple(dest_dir=dest_agg_dir, special_suffix='.csv', num_files=2, overwrite=overwrite):
         if verbose: print('...SKIP: ALREADY COMPLETED SIM DATA ... [%s] [%s]' % (subject_id, param_id))
-        if overwrite:
-            df_agg.to_csv(agg_path, header=True, index=True, mode='w')
     else:
         df_agg.to_csv(agg_path, header=True, index=True, mode='w')
-    if verbose: print("...COMPLETE AGG SIMULATION...\n")
-
+    if verbose: print("...COMPLETE AGG SIM DATA...[%s]\n" % (model))
     return df_model, df_agg
 
 #----------------------------------------#
@@ -109,24 +124,25 @@ def process_subject_data(df, subject_id):
     df = df.dropna(axis=0, subset=['ResponseSwitch'])
     return df
 
-def save_subject_aggregate_data(main_dir, subject_dir, subject_id, verbose=False):
+def save_subject_aggregate_data(main_dir, subject_dir, subject_id, verbose=False, overwrite=False):
     """
     Save HCP subjects aggregate data
+        ResponseSwitch = FutureResponse - CurrResponse
+        The grouping variable should match MAXLL_FACTOR_VAR
+        drop any trial that ResponseSwitch is NaN (the last trial of each block): the ultimate total number of
+        trials left = 64 - 8 = 56
     """
     ori_path = os.path.join(main_dir, subject_dir, subject_id, 'subject.csv')
 
-    df = pd.read_csv(ori_path, usecols=['HCPID', 'BlockTypeCoded', 'TrialType', 'PreviousFeedback', 'PastResponse',
-                                        'CurrentResponse', 'ResponseSwitch'])
-    df = df.rename(columns={'BlockTypeCoded': 'BlockType'})
-    df['ResponseSwitch'] = df.apply(lambda x: 0 if x['CurrentResponse'] == x['PastResponse'] else 1, axis=1)
-    df = df.dropna(subset=['PastResponse'])
+    df = pd.read_csv(ori_path, usecols=['HCPID', 'BlockTypeCoded', 'TrialType', 'ResponseSwitch']).rename(columns={'BlockTypeCoded': 'BlockType'})
+    df = df.dropna(subset=['ResponseSwitch'])
 
     #  calculate agg by group variable
     df_agg = df.groupby(['HCPID'] + MAXLL_FACTOR_VAR).agg({'ResponseSwitch': 'mean'}).reset_index()
 
     dest_dir = os.path.join(main_dir, subject_dir, subject_id, 'aggregate')
-    # simple check
-    if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=1):
+    # check if exist 1 file in aggregate/
+    if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=1, overwrite=overwrite):
         if verbose: print('...SKIP: ALREADY COMPLETED maxLL ... <%s> [%s]' % (dest_dir, subject_id))
         return
 
@@ -157,7 +173,7 @@ def save_model_aggregate_data(main_dir, model_dir, subject_dir, subject_id, mode
     # define destination dir
     dest_dir = os.path.join(main_dir, subject_dir, subject_id, 'likelihood')
 
-    # check if already exist
+    # check if exist 2 files MODEL1.csv MODEL2.csv in likelihood/
     if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=2, overwrite=overwrite):
         print('...SKIP: ALREADY COMPLETED AGG MODEl DATA ... [%s] [%s]' % (subject_id, model))
         return
@@ -187,8 +203,8 @@ def load_best_parameter_list(main_dir, log_dir):
                       'r': 0.1,
                       'param_id': 'param0'}, ...]
     """
-    maxLL = pd.read_csv(os.path.join(main_dir, 'data', 'MODELLogLikelihood.csv'),
-                        usecols=['HCPID', 'ans.m1', 'bll.m1', 'lf.m1', 'ans.m2', 'bll.m2', 'lf.m2'])
+    maxLL = pd.read_csv(os.path.join(main_dir, 'data', 'old_actr_maxLL.csv'),
+                        usecols=['HCPID', 'ans', 'bll', 'lf', 'egs', 'alpha', 'r'])
     maxLL.columns = ['subject_id', 'ans', 'bll', 'lf', 'egs', 'alpha', 'r']
     maxLL['ans'] = maxLL['ans'].fillna(0)
     maxLL = maxLL.drop_duplicates()
@@ -226,16 +242,10 @@ def merge_for_maxLL(df_model, df_subject, param_cols):
     df_subject = df_subject[['HCPID','ResponseSwitch']+MAXLL_FACTOR_VAR]
     df_merge = pd.merge(df_model, df_subject, how='left')
 
-    # NOTE: exclude neutral trials
-    try:
-        df_merge = df_merge[df_merge['PreviousFeedback'] != 'Neutral']
-    except:
-        pass
-
-    try:
-        df_merge = df_merge[df_merge['TrialType'] != 'Neutral']
-    except:
-        pass
+    # NOTE: whether or not exclude neutral trials
+    if MAXLL_EXCLUDE_NEUTRAl:
+        assert 'TrialType'  in MAXLL_FACTOR_VAR
+        df_merge =  df_merge[df_merge['TrialType'] != 'Neutral']
 
     df_merge = df_merge.sort_values(by = ['HCPID']+param_cols+MAXLL_FACTOR_VAR)
     return df_merge
@@ -254,6 +264,9 @@ def get_subject_ids(exclude_list = None):
 
 def check_exists_simple(dest_dir, special_suffix, num_files, overwrite=False):
     if os.path.exists(dest_dir) and len(glob.glob(os.path.join(dest_dir, '*' + special_suffix))) == num_files:
+        if overwrite:
+            print("...OVERWRITE...")
+            return False
         return True
     else:
         print('...CREATE', dest_dir)
@@ -285,19 +298,55 @@ def merge_parameter_recovery_data(main_dir, log_dir='data/simulation_test', mode
             ...
     """
     # load maxLL
-    m_paths = os.path.join(main_dir, log_dir, '*', '*', 'maxll', str.upper(model) + '-maxLL.csv')
-    m_files = glob.glob(m_paths)
+    # has param_id sub-folder
+    m_files = glob.glob(os.path.join(main_dir, log_dir, '*', '*', 'maxll', str.upper(model) + '-maxLL.csv'))
+    # no param_id sub-folder
+    if len(m_files) == 0:
+        m_files = glob.glob(os.path.join(main_dir, log_dir, '*', 'maxll', str.upper(model) + '-maxLL.csv'))
     df_maxLL_m = pd.concat([pd.read_csv(f, index_col=0) for f in m_files], axis=0)
 
     # reshape dataframe
-    res = reshape_recovery_data(df=df_maxLL_m, model=model)
-    return res
+    df = reshape_recovery_data(df=df_maxLL_m, model=model)
+    return df
 
+def confusion_matrix(df: pd.DataFrame, col1: str, col2: str):
+    """
+    Given a dataframe with at least
+    two categorical columns, create a
+    confusion matrix of the count of the columns
+    cross-counts
+
+    use like:
+    >>> confusion_matrix(test_df, 'actual_label', 'predicted_label')
+    """
+    return (
+        df
+            .groupby([col1, col2])
+            .size()
+            .unstack(fill_value=0)
+    )
+
+def compare_actr_maxLL(main_dir, log_dir):
+    """
+    Compare new vs. old actr_maxLL.csv
+    """
+    # df0 = pd.read_csv(os.path.join(main_dir, 'data/MODELLogLikelihood.csv'), index_col=0, usecols=['HCPID', 'best_model', 'PSwitch.LL.m2', 'PSwitch.LL.m1'])
+    # df0 = df0.rename(columns = {'PSwitch.LL.m2':'LL.m2', 'PSwitch.LL.m1':'LL.m1'})
+    # df0['LL.diff'] = df0['LL.m1'] - df0['LL.m2']
+    # df0 = df0.sort_values(by = 'HCPID')
+    try:
+        df0 = pd.read_csv(os.path.join(main_dir, 'data/old_actr_maxLL.csv'))
+        df1 = pd.read_csv(os.path.join(main_dir, log_dir, 'actr_maxLL.csv'), index_col=0)
+        df_compare = pd.merge(df0, df1, suffixes=('.old', '.new'), how='right')
+    except:
+        print("NO NEW actr_maxLL.csv FOUND...")
+        return
+    return df_compare, df0, df1
 
 #----------------------------------------#
 # RUN PIPELINE
 #----------------------------------------#
-def run_maxLL_pipline(main_dir, subject_dir):
+def run_maxLL_pipline(main_dir, subject_dir, overwrite=True):
     """
     Input: 'gambling_clean_data.csv'
     Output: aggregate subject data, aggregate model data, and maxLL data
@@ -306,40 +355,54 @@ def run_maxLL_pipline(main_dir, subject_dir):
     df = pd.read_csv(os.path.join(main_dir, 'data', 'gambling_clean_data.csv'), index_col=0)
     for subject_id in subject_ids:
         df_subject = df[df['HCPID'] == subject_id]
+
+        # prepare dest fir
         dest_dir = os.path.join(main_dir, subject_dir, subject_id)
         if not os.path.exists(dest_dir):
             os.makedirs(dest_dir)
+
+        # reformat subject data
         df_subject = process_subject_data(df=df_subject, subject_id=subject_id)
-        df_subject.to_csv(os.path.join(dest_dir, 'subject.csv'))
+        if check_exists_simple(dest_dir=dest_dir, num_files=1, special_suffix=".csv", overwrite=False):
+            print("...SKIP: ALREADY REFORMAT SUBJ DATA ... [%s]" % (subject_id))
+        else:
+            df_subject.to_csv(os.path.join(dest_dir, 'subject.csv'))
 
         # save subject agg data
-        save_subject_aggregate_data(main_dir=main_dir, subject_dir=subject_dir, subject_id=subject_id, verbose=False)
+        save_subject_aggregate_data(main_dir=main_dir,
+                                    subject_dir=subject_dir,
+                                    subject_id=subject_id,
+                                    verbose=False,
+                                    overwrite=overwrite)
 
         # save model agg data
         save_model_aggregate_data(main_dir=main_dir,
                                   model_dir='data/model_output_local',
                                   subject_dir=subject_dir,
                                   subject_id=subject_id,
-                                  model='model1', overwrite=True)
+                                  model='model1', overwrite=overwrite)
 
         save_model_aggregate_data(main_dir=main_dir,
                                   model_dir='data/model_output_local',
                                   subject_dir=subject_dir,
                                   subject_id=subject_id,
-                                  model='model2', overwrite=True)
+                                  model='model2', overwrite=overwrite)
 
         # save maxLL
         save_maxLL_data(main_dir=main_dir,
                log_dir=subject_dir,
                subject_id=subject_id,
                model='model1',
-               overwrite=True)
+               overwrite=overwrite)
 
         save_maxLL_data(main_dir=main_dir,
                log_dir=subject_dir,
                subject_id=subject_id,
                model='model2',
-               overwrite=True)
+               overwrite=overwrite)
+
+    # combine maxLL
+    save_model_classification(main_dir=main_dir, subject_dir=subject_dir)
 
 def save_maxLL_data(main_dir, log_dir, subject_id, model, overwrite):
     """
@@ -353,15 +416,17 @@ def save_maxLL_data(main_dir, log_dir, subject_id, model, overwrite):
     df_subject = pd.read_csv(subject_path, index_col=0)
     df_model = pd.read_csv(model_path, index_col=0)
 
-    # df_merge = pd.merge(df_model, df_subject, how='left')
+    # use merge method
+    # may include/exclude neutral
     df_merge = merge_for_maxLL(df_model=df_model, df_subject=df_subject, param_cols=ACTR_PARAMETER_NAME[model])
     df_maxLL = calculate_maxLL(df_merge=df_merge, param_cols=ACTR_PARAMETER_NAME[model])
     # df_maxLL['HCPID'] = subject_id
 
     # save data
     dest_dir = os.path.join(main_dir, log_dir, subject_id, 'maxll')
-    if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=4, overwrite=overwrite):
-        print('...SKIP: ALREADY COMPLETED maxLL ... [%s] [%s]' % (model, subject_id))
+    # check if exist 6 files in maxll/
+    if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=6, overwrite=overwrite):
+        print('...SKIP: ALREADY CALCULATED maxLL ... [%s] [%s]' % (model, subject_id))
         return
 
     # merge  maxLL and aggregate subject data (fake)
@@ -383,6 +448,7 @@ def save_model_classification(main_dir, subject_dir):
     """
     Combine maxLL data and determine best model
     """
+    ## TODO: this only works if no param_id folder is found
     df_model1 = [pd.read_csv(f, index_col=0) for f in
                  glob.glob(os.path.join(main_dir, subject_dir, '*', 'maxll', '*1-maxLL.csv'))]
     df_model2 = [pd.read_csv(f, index_col=0) for f in
@@ -391,19 +457,27 @@ def save_model_classification(main_dir, subject_dir):
     df1 = pd.concat(df_model1)
     df2 = pd.concat(df_model2)
 
-    merge_cols = ['HCPID', 'ResponseSwitch'] + MAXLL_FACTOR_VAR
+    merge_cols = ['HCPID'] + MAXLL_FACTOR_VAR
     df = pd.merge(df1, df2, on=merge_cols, suffixes=('.m1', '.m2')).sort_values(by='HCPID')
 
     df['LL.diff'] = df.apply(lambda x: x['LL.m1'] - x['LL.m2'], axis=1)
     df = df[merge_cols + [c for c in df.columns if c not in merge_cols]]
     df['best_model'] = df.apply(lambda x: 'm1' if x['LL.m1'] > x['LL.m2'] else 'm2', axis=1)
 
+    if check_exists_simple(dest_dir=subject_dir, special_suffix='actr_maxLL.csv', num_files=1):
+        print('...SKIP... MODEL CLASSIFICATION...')
+        return df
     df.to_csv(os.path.join(main_dir, subject_dir, 'actr_maxLL.csv'))
-    print('...COMPLETE MODEL CLASSIFICATION...')
+    print('...COMPLETE MODEL CLASSIFICATION...[actr_maxLL.csv]')
 
+    # save simulation info
+    df_readme = pd.DataFrame({'MAXLL_FACTOR_VAR': MAXLL_FACTOR_VAR,
+                              'MAXLL_EXCLUDE_NEUTRAl': MAXLL_EXCLUDE_NEUTRAl}).reset_index()
+    df_readme.to_csv(os.path.join(main_dir, subject_dir, 'README.txt'))
+    print('...COMPLETE ...[README.txt]')
     return df
 
-def run_maxLL_pr_pipline(main_dir, subject_dir, param_list):
+def run_maxLL_pr_pipline(main_dir, subject_dir, param_list, overwrite):
     """
     Run one simulation for parameter recovery analysis
 
@@ -437,7 +511,7 @@ def run_maxLL_pr_pipline(main_dir, subject_dir, param_list):
                  param_id=param_id,
                  model='model1',
                  param_set=param_set,
-                 verbose=False,
+                 verbose=True,
                  log_dir=subject_dir,
                  special_suffix="",
                  overwrite=False)
@@ -446,10 +520,28 @@ def run_maxLL_pr_pipline(main_dir, subject_dir, param_list):
                  param_id=param_id,
                  model='model2',
                  param_set=param_set,
-                 verbose=False,
+                 verbose=True,
                  log_dir=subject_dir,
                  special_suffix="",
                  overwrite=False)
+
+        # save model simulation(fake subject) aggregate data
+        save_simulation_aggregate_data(main_dir=main_dir,
+                                       log_dir=subject_dir,
+                                       subject_id=subject_id,
+                                       param_id=param_id,
+                                       model='model1',
+                                       special_suffix="",
+                                       verbose=True,
+                                       overwrite=overwrite)
+        save_simulation_aggregate_data(main_dir=main_dir,
+                                       log_dir=subject_dir,
+                                       subject_id=subject_id,
+                                       param_id=param_id,
+                                       model='model2',
+                                       special_suffix="",
+                                       verbose=True,
+                                       overwrite=overwrite)
 
         # re-process model data
         save_model_aggregate_data(main_dir=main_dir,
@@ -457,14 +549,14 @@ def run_maxLL_pr_pipline(main_dir, subject_dir, param_list):
                                   subject_dir=subject_dir,
                                   subject_id=subject_id,
                                   model='model1',
-                                  overwrite=False)
+                                  overwrite=overwrite)
 
         save_model_aggregate_data(main_dir=main_dir,
                                   model_dir='data/model_output_local',
                                   subject_dir=subject_dir,
                                   subject_id=subject_id,
                                   model='model2',
-                                  overwrite=False)
+                                  overwrite=overwrite)
 
         # calculate maxLL
         save_maxLL_pr_data(main_dir=main_dir,
@@ -472,13 +564,19 @@ def run_maxLL_pr_pipline(main_dir, subject_dir, param_list):
                            subject_id=subject_id,
                            param_id=param_id,
                            model='model1',
-                           overwrite=False)
+                           overwrite=overwrite)
         save_maxLL_pr_data(main_dir=main_dir,
                            log_dir=subject_dir,
                            subject_id=subject_id,
                            param_id=param_id,
                            model='model2',
-                           overwrite=False)
+                           overwrite=overwrite)
+
+    # combine maxLL
+    save_model_classification(main_dir=main_dir, subject_dir=subject_dir)
+
+
+
 
 def save_maxLL_pr_data(main_dir, log_dir, subject_id, param_id, model, overwrite=False):
     """
@@ -495,16 +593,15 @@ def save_maxLL_pr_data(main_dir, log_dir, subject_id, param_id, model, overwrite
 
     # merge df_model and df_subject
     # note: need to remove param_cols [ans, bll, lf]
-    # df_merge = pd.merge(df_model, df_subject.drop(columns=param_cols), how='left')
     df_merge = merge_for_maxLL(df_model=df_model, df_subject=df_subject, param_cols=ACTR_PARAMETER_NAME[model])
     df_maxLL = calculate_maxLL(df_merge=df_merge, param_cols=ACTR_PARAMETER_NAME[model])
 
     # save maxLL data
     dest_dir = os.path.join(main_dir, log_dir, subject_id, param_id, 'maxll')
-    if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=4, overwrite=overwrite):
-        print('...SKIP: ALREADY COMPLETED maxLL ... [%s] [%s] [%s]' % (model, subject_id, param_id))
+    # check if exist 6 files in maxll
+    if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=6, overwrite=overwrite):
+        print('...SKIP: ALREADY CALCULATED maxLL ... [%s] [%s] [%s]' % (model, subject_id, param_id))
         return
-
 
     # merge  maxLL and aggregate subject data (fake)
     df_merge.to_csv(os.path.join(dest_dir, str.upper(model) + '-' +subject_id + '-merged.csv'))
@@ -515,7 +612,7 @@ def save_maxLL_pr_data(main_dir, log_dir, subject_id, param_id, model, overwrite
     df_maxLL_top = df_maxLL[df_maxLL['LL'] >= maxLL][['HCPID','LL'] + ACTR_PARAMETER_NAME[model]]
 
     # merge maxLL data  and subject data
-    res = pd.merge(df_maxLL_top, df_subject[ACTR_PARAMETER_NAME[model]].drop_duplicates(), how='cross', suffixes=('.m', '.s'))
+    res = pd.merge(pd.merge(df_model, df_maxLL_top, on=ACTR_PARAMETER_NAME[model]).dropna(axis=0), df_subject, on=['HCPID'] + MAXLL_FACTOR_VAR, suffixes=('.m', '.s'))
     res.to_csv(os.path.join(dest_dir, str.upper(model) + '-maxLL.csv'))
     print('...COMPLETE maxLL DATA ...[%s] [%s]' % (subject_id, model))
     return res
