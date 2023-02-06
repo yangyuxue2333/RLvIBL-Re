@@ -1,6 +1,5 @@
-import random
 import sys
-import os
+
 SCRIPT_PATH = os.path.join(os.path.abspath(os.path.dirname('../__file__')), 'script')
 sys.path.insert(0, SCRIPT_PATH)
 from simulate import *
@@ -9,6 +8,7 @@ import numpy as np
 # Prepare working directory
 main_dir = os.path.abspath(os.path.dirname(os.getcwd()))
 subject_dir = 'data/simulation_1condition_exclude_neutral/simulation_pr_best'
+# subject_dir = 'data/simulation_2condition_include_neutral/simulation_pr_best'
 
 # Load HCP subject ids
 subject_ids = np.sort([f.split('/')[-1].split('.')[-2] for f in glob.glob(os.path.join(main_dir, 'data', 'gambling_trials', '*.csv'))])
