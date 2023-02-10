@@ -1,3 +1,4 @@
+import os
 import sys
 
 SCRIPT_PATH = os.path.join(os.path.abspath(os.path.dirname('../__file__')), 'script')
@@ -11,17 +12,17 @@ random.seed(0)
 
 # Prepare working directory
 main_dir = os.path.abspath(os.path.dirname(os.getcwd()))
-subject_dir = 'data/simulation_1condition_exclude_neutral/simulation_pr'
-# subject_dir = 'data/simulation_2condition_include_neutral/simulation_pr'
+# subject_dir = 'data/simulation_pr'
+# subject_dir = 'data/simulation_1condition_exclude_neutral/simulation_pr'
+subject_dir = 'data/simulation_2condition_include_neutral/simulation_pr'
 
-# subject_dir = 'data/test'
 
-ans = [0.05, 0.2, 0.3, 0.4, 0.5]
+ans = [0.01, 0.2, 0.3, 0.4, 0.5]
 bll = [.2, .5, .8]
 lf = [0.1]
-egs =  [0.05, 0.2, 0.3, 0.4, 0.5]
+egs =  [0.01, 0.2, 0.3, 0.4, 0.5]
 alpha = [.2, .5, .8]
-r = [0.1]
+r = [1]
 
 ls = list(itertools.product(*[ans, bll, lf, egs, alpha, r]))
 
@@ -40,6 +41,6 @@ for subject_id in subject_ids:
 print('>>> START SIMULATION: <%s> \nPARAM [%d] \t SUBJ [%d] \t NUM SIMULATION [%d]' % (subject_dir, len(ls), len(subject_ids), len(param_list)))
 
 # Start simulation
-run_maxLL_pr_pipline(main_dir=main_dir, subject_dir=subject_dir, param_list=param_list, overwrite=True)
+run_maxLL_pr_pipline(main_dir=main_dir, subject_dir=subject_dir, param_list=param_list, overwrite=False, analysis_type='pr_random')
 
 print('>>>END...MAXLL_FACTOR_VAR: [%s] \n MAXLL_EXCLUDE_NEUTRAl: [%s]' % (str(MAXLL_FACTOR_VAR), str(MAXLL_EXCLUDE_NEUTRAl)))

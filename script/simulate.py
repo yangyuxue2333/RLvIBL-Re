@@ -10,7 +10,7 @@ from device import *
 warnings.filterwarnings('ignore')
 
 MAXLL_FACTOR_VAR = ['BlockType', 'TrialType']
-MAXLL_EXCLUDE_NEUTRAl = True
+MAXLL_EXCLUDE_NEUTRAl = False
 ACTR_PARAMETER_NAME = {'model1': ['ans', 'bll', 'lf'], 'model2':['egs', 'alpha', 'r']}
 
 #----------------------------------------#
@@ -152,7 +152,7 @@ def save_subject_aggregate_data(main_dir, subject_dir, subject_id, verbose=False
         if verbose: print('...SKIP: ALREADY COMPLETED SUBJ AGG ... <%s> [%s]' % (dest_dir, subject_id))
         return
 
-    dest_path = os.path.join(dest_dir, 'subject-agg.csv')
+    dest_path = os.path.join(dest_dir, subject_id+'-agg.csv')
     df_agg.to_csv(dest_path)
     if verbose: print('... COMPLETE SUBJECT AGG DATA...[%s]' % (subject_id))
     return df_agg
@@ -245,8 +245,12 @@ def calculate_maxLL(df_merge, param_cols):
 
     # note: need to aggregate by model parameter
     # param_cols should be [xx.m, xx.m, xx.m]
-    df_maxLL = df_merge.groupby(factor_cols + param_cols).agg(LL=('PSwitch_logprobz', 'sum')).reset_index().sort_values(by='LL', ascending=False)
-    return df_maxLL
+    try:
+        df_maxLL = df_merge.groupby(factor_cols + param_cols).agg(LL=('PSwitch_logprobz', 'sum')).reset_index().sort_values(by='LL', ascending=False)
+        return df_maxLL
+    except:
+        df_maxLL = df_merge.groupby(factor_cols + [c+'.m' for c in param_cols]).agg(LL=('PSwitch_logprobz', 'sum')).reset_index().sort_values(by='LL', ascending=False)
+        return df_maxLL
 
 def merge_for_maxLL(df_model, df_subject, param_cols):
     """
@@ -265,8 +269,7 @@ def merge_for_maxLL(df_model, df_subject, param_cols):
     if MAXLL_EXCLUDE_NEUTRAl:
         assert 'TrialType' in MAXLL_FACTOR_VAR
         df_merge =  df_merge[df_merge['TrialType'] != 'Neutral']
-
-    df_merge = df_merge.sort_values(by = ['HCPID']+param_cols+MAXLL_FACTOR_VAR)
+    df_merge = df_merge.sort_values(by = ['HCPID']+MAXLL_FACTOR_VAR)
     return df_merge
 #----------------------------------------#
 # HERLPER FUNCTION
@@ -287,8 +290,12 @@ def check_exists_simple(dest_dir, special_suffix, num_files, overwrite=False):
     # re-create new empty dir
     if overwrite:
         print("...OVERWRITE...[%s]" % (dest_dir))
-        shutil.rmtree(dest_dir)
-        os.makedirs(dest_dir, exist_ok=True)
+        try:
+            shutil.rmtree(dest_dir)
+        except:
+            print("No DIR", dest_dir)
+        finally:
+            os.makedirs(dest_dir, exist_ok=True)
     if os.path.exists(dest_dir) and len(glob.glob(os.path.join(dest_dir, '*' + special_suffix))) == num_files:
         return True
     else:
@@ -378,7 +385,7 @@ def compare_actr_maxLL(main_dir, log_dir):
 #----------------------------------------#
 # RUN PIPELINE
 #----------------------------------------#
-def run_maxLL_pipline(main_dir, subject_dir, overwrite=True):
+def run_maxLL_pipline(main_dir, subject_dir, overwrite=True, analysis_type='subject'):
     """
     Input: 'gambling_clean_data.csv'
     Output: aggregate subject data, aggregate model data, and maxLL data
@@ -434,13 +441,59 @@ def run_maxLL_pipline(main_dir, subject_dir, overwrite=True):
                overwrite=False)
 
     # combine maxLL
-    save_model_classification(main_dir=main_dir, subject_dir=subject_dir, param_list=None)
+    save_model_classification(main_dir=main_dir, subject_dir=subject_dir, param_list=None, overwrite=overwrite, analysis_type=analysis_type)
 
-def save_maxLL_data(main_dir, log_dir, subject_id, model, overwrite):
+# def save_maxLL_data(main_dir, log_dir, subject_id, model, overwrite):
+#     """
+#     Calculate maxLL for real HCP subject data and save to maxll folder
+#     """
+#     subject_path = os.path.join(main_dir, log_dir, subject_id, 'aggregate', 'subject-agg.csv')
+#     model_path = os.path.join(main_dir, log_dir, subject_id, 'likelihood', str.upper(model) + '.csv')
+#     # print(subject_path)
+#
+#     # load single subject and model data
+#     df_subject = pd.read_csv(subject_path, index_col=0)
+#     df_model = pd.read_csv(model_path, index_col=0)
+#
+#     # use merge method
+#     # may include/exclude neutral
+#     # merge  maxLL and aggregate subject data (fake)
+#     # save data
+#     dest_dir = os.path.join(main_dir, log_dir, subject_id, 'maxll')
+#
+#     # check if exist 6 files in maxll/
+#     if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=6, overwrite=overwrite):
+#         print('...SKIP: ALREADY CALCULATED maxLL ... [%s] [%s]' % (model, subject_id))
+#         return
+#
+#     # merge df_model and df_subject and save
+#     df_merge = merge_for_maxLL(df_model=df_model, df_subject=df_subject, param_cols=ACTR_PARAMETER_NAME[model])
+#
+#     # calculate maxLL
+#     df_maxLL = calculate_maxLL(df_merge=df_merge, param_cols=ACTR_PARAMETER_NAME[model])
+#
+#     # save maxLL data
+#     df_merge.to_csv(os.path.join(dest_dir, str.upper(model) + '-' + subject_id + '-merged.csv'))
+#     df_maxLL.to_csv(os.path.join(dest_dir, str.upper(model) + '.csv'))
+#     # df_maxLL['HCPID'] = subject_id
+#
+#     # find maxLL
+#     maxLL = df_maxLL['LL'].max()
+#     df_maxLL_top = df_maxLL[df_maxLL['LL'] >= maxLL][['HCPID','LL'] + ACTR_PARAMETER_NAME[model]]
+#
+#     # merge maxLL and subject data
+#     res = pd.merge(df_model, pd.merge(df_maxLL_top, df_subject, how='outer'), how='inner')
+#     res.to_csv(os.path.join(dest_dir, str.upper(model) + '-maxLL.csv'))
+#     print('...COMPLETE maxLL DATA ...[%s] [%s]' % (subject_id, model))
+#     return res
+
+def save_maxLL_data(main_dir, log_dir, subject_id, model, overwrite=False):
     """
-    Calculate maxLL for real HCP subject data and save to maxll folder
+    Calculate maxLL for real subject and save to maxll folder
+    model: model1 or model2, the simulated model
+    model_fake_subject: model1 or model2, the fake subject data file generated by whichever model (model1 or model2)
     """
-    subject_path = os.path.join(main_dir, log_dir, subject_id, 'aggregate', 'subject-agg.csv')
+    subject_path = os.path.join(main_dir, log_dir, subject_id, 'aggregate', subject_id+'-agg.csv')
     model_path = os.path.join(main_dir, log_dir, subject_id, 'likelihood', str.upper(model) + '.csv')
     # print(subject_path)
 
@@ -448,49 +501,72 @@ def save_maxLL_data(main_dir, log_dir, subject_id, model, overwrite):
     df_subject = pd.read_csv(subject_path, index_col=0)
     df_model = pd.read_csv(model_path, index_col=0)
 
-    # use merge method
-    # may include/exclude neutral
-    # merge  maxLL and aggregate subject data (fake)
-    # save data
+    # save maxLL data
     dest_dir = os.path.join(main_dir, log_dir, subject_id, 'maxll')
 
-    # check if exist 6 files in maxll/
+    # check if exist 12 files in maxll
     if check_exists_simple(dest_dir=dest_dir, special_suffix='.csv', num_files=6, overwrite=overwrite):
         print('...SKIP: ALREADY CALCULATED maxLL ... [%s] [%s]' % (model, subject_id))
         return
 
-    # merge df_model and df_subject and save
+    # merge df_model and df_subject
+    # note: need to remove param_cols
     df_merge = merge_for_maxLL(df_model=df_model, df_subject=df_subject, param_cols=ACTR_PARAMETER_NAME[model])
-
-    # calculate maxLL
     df_maxLL = calculate_maxLL(df_merge=df_merge, param_cols=ACTR_PARAMETER_NAME[model])
 
-    # save maxLL data
-    df_merge.to_csv(os.path.join(dest_dir, str.upper(model) + '-' + subject_id + '-merged.csv'))
-    df_maxLL.to_csv(os.path.join(dest_dir, str.upper(model) + '.csv'))
-    # df_maxLL['HCPID'] = subject_id
 
-
-
-
-
-    # find maxLL
+    # find maxLL and keep all rows
     maxLL = df_maxLL['LL'].max()
-    df_maxLL_top = df_maxLL[df_maxLL['LL'] >= maxLL][['HCPID','LL'] + ACTR_PARAMETER_NAME[model]]
 
-    # merge maxLL and subject data
-    res = pd.merge(df_model, pd.merge(df_maxLL_top, df_subject, how='outer'), how='inner')
-    res.to_csv(os.path.join(dest_dir, str.upper(model) + '-maxLL.csv'))
-    print('...COMPLETE maxLL DATA ...[%s] [%s]' % (subject_id, model))
-    return res
+    try:
+        # pr analysis
+        df_maxLL_top = df_maxLL[df_maxLL['LL'] >= maxLL][['HCPID','LL'] + ACTR_PARAMETER_NAME[model]]
+        # subject maxLL
+    except:
+        df_maxLL_top = df_maxLL[df_maxLL['LL'] >= maxLL][['HCPID', 'LL'] + [c+'.m' for c in ACTR_PARAMETER_NAME[model]]]
+    finally:
+        # merge maxLL and subject data
+        res = pd.merge(df_model, pd.merge(df_maxLL_top, df_subject, how='outer'), how='inner')
+        # res['FakeModel'] = model_fake_subject
+
+        # merge  maxLL and aggregate subject data (fake)
+        df_merge.to_csv(os.path.join(dest_dir, str.upper(model) + '-' + subject_id + '-merged.csv'))
+        df_maxLL.to_csv(os.path.join(dest_dir, str.upper(model) + '-' + subject_id + '.csv'))
+        res.to_csv(os.path.join(dest_dir, str.upper(model)  + '-' + subject_id + '-maxLL.csv'))
+        print('...COMPLETE maxLL DATA ...[%s] [%s]' % (model, subject_id))
+        return res
 
 
-def save_model_classification(main_dir, subject_dir, param_list=None, overwrite=False):
+def save_model_classification(main_dir, subject_dir, param_list=None, overwrite=False, analysis_type='subject'):
     """
     Combine maxLL data and determine best model
 
     For parameter
     """
+    assert analysis_type in ('subject', 'pr_best', 'pr_random')
+
+    if analysis_type == 'subject':
+        df = estimate_model_class_subject(main_dir=main_dir, subject_dir=subject_dir)
+    if analysis_type == 'pr_best':
+        df_list = []
+        for subject_id in get_subject_ids():
+            tempt = estimate_model_class_pr(main_dir=main_dir,
+                                            subject_dir=subject_dir,
+                                            subject_id=subject_id,
+                                            param_id='')
+            df_list.append(tempt)
+        df = pd.concat(df_list, axis=0)
+    if analysis_type == 'pr_random':
+        df_list = []
+        for subject_id in get_subject_ids():
+            param_ids = np.sort([p.split('/')[-1] for p in glob.glob(os.path.join(main_dir,  subject_dir, subject_id, 'param*'))])
+            for param_id in param_ids:
+                tempt = estimate_model_class_pr(main_dir=main_dir,
+                                                subject_dir=subject_dir,
+                                                subject_id=subject_id,
+                                                param_id=param_id)
+                df_list.append(tempt)
+        df = pd.concat(df_list, axis=0)
     if param_list:
         df_param = pd.DataFrame(param_list)
         df_param['MAXLL_FACTOR_VAR'] = str(MAXLL_FACTOR_VAR)
@@ -498,7 +574,6 @@ def save_model_classification(main_dir, subject_dir, param_list=None, overwrite=
         df_param.to_csv(os.path.join(main_dir, subject_dir, 'README.txt'), index=False)
         print('...SAVE README.txt ...')
 
-    df = estimate_model_class(main_dir=main_dir, subject_dir=subject_dir)
     if check_exists_simple(dest_dir=subject_dir, special_suffix='actr_maxLL.csv', num_files=1, overwrite=overwrite):
         print('...SKIP... MODEL CLASSIFICATION...')
         return df
@@ -553,94 +628,170 @@ def save_model_classification(main_dir, subject_dir, param_list=None, overwrite=
 #         df['BestModel'] = df.apply(lambda x: 'model1' if x['LL.m1'] > x['LL.m2'] else 'model2', axis=1)
 #
 #         return df
-def estimate_model_class(main_dir, subject_dir):
+
+
+# def estimate_model_class_best_param(main_dir, subject_dir):
+#     """
+#     Estimate the model class
+#     """
+#
+#     # try:
+#     # single param_id
+#     # all files starts with MODEL1- fake model1 and fake model2 estimated using model1
+#     m1_files = glob.glob(
+#         os.path.join(main_dir, subject_dir, '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model1'))))
+#     m2_files = glob.glob(
+#         os.path.join(main_dir, subject_dir, '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model2'))))
+#
+#     # concat maxLL for all subjects, all param ids
+#     df_model1 = pd.concat([pd.read_csv(f, index_col=0) for f in m1_files], axis=0)
+#     df_model2 = pd.concat([pd.read_csv(f, index_col=0) for f in m2_files], axis=0)
+#     # except:
+#     #     # all param_id
+#     #     m1_files = glob.glob(
+#     #         os.path.join(main_dir, subject_dir, '*', '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model1'))))
+#     #     m2_files = glob.glob(
+#     #         os.path.join(main_dir, subject_dir, '*', '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model2'))))
+#     #
+#     #     # concat maxLL for all subjects, all param ids
+#     #     df_model1 = pd.concat([pd.read_csv(f, index_col=0) for f in m1_files], axis=0)
+#     #     df_model2 = pd.concat([pd.read_csv(f, index_col=0) for f in m2_files], axis=0)
+#
+#     # finally:
+#     # df_model1['BlockType'] = df_model1.apply(lambda x: pd.Categorical(x['BlockType'], categories=['MostlyReward', 'MostlyPunishment']))
+#     df_model1['BlockType'] = pd.Categorical(df_model1['BlockType'], categories=df_model1['BlockType'].unique())
+#     df_model1['TrialType'] = pd.Categorical(df_model1['TrialType'], categories=df_model1['TrialType'].unique())
+#     df_model2['BlockType'] = pd.Categorical(df_model2['BlockType'], categories=df_model2['BlockType'].unique())
+#     df_model2['TrialType'] = pd.Categorical(df_model2['TrialType'], categories=df_model2['TrialType'].unique())
+#
+#     # drop .s columns
+#     m1_s_cols = [c for c in df_model1.columns if c.endswith('.s')]
+#     m2_s_cols = [c for c in df_model2.columns if c.endswith('.s')]
+#     df_model1_drops = df_model1.drop(columns=m1_s_cols)
+#     df_model2_drops = df_model2.drop(columns=m2_s_cols)
+#
+#     # only select max LL for each subject, each model, across param_ids
+#     # df1 = df_model1.groupby(['HCPID', 'FakeModel']).agg({'LL':'max'}).reset_index() #.agg(LL = ('LL', 'max')).reset_index()
+#     # df2 = df_model2.groupby(['HCPID', 'FakeModel']).agg({'LL':'max'}).reset_index() #.agg(LL = ('LL', 'max')).reset_index()
+#     maxLL1 = df_model1_drops.groupby(['HCPID', 'FakeModel'])['LL'].max().reset_index()
+#     maxLL2 = df_model2_drops.groupby(['HCPID', 'FakeModel'])['LL'].max().reset_index()
+#
+#     # outer join maxLL1 and maxLL2
+#     # each row is a fake subject
+#     # LL.m1 is LL estimated by model1
+#     # LL.m2 is LL estimated by model2
+#     # BestModel is the determined by higher LL between LL.m1 and LL.m2
+#     maxLL = pd.merge(maxLL1, maxLL2, how='outer', on=['HCPID', 'FakeModel'], suffixes=('.m1', '.m2'))
+#     maxLL['LL.diff'] = maxLL.apply(lambda x: x['LL.m1'] - x['LL.m2'], axis=1)
+#     maxLL['BestModel'] = maxLL.apply(lambda x: 'model1' if x['LL.m1'] > x['LL.m2'] else 'model2', axis=1)
+#
+#     # join back to obtain parameter and simulation data
+#     m1_cols = [c for c in df_model1.columns if (c.endswith('.s') or c.endswith('.m'))]
+#     m2_cols = [c for c in df_model2.columns if (c.endswith('.s') or c.endswith('.m'))]
+#
+#     df_join1 = pd.merge(maxLL, df_model1[['HCPID', 'FakeModel'] + m1_cols].drop_duplicates(), how='right')
+#     df_join2 = pd.merge(maxLL, df_model2[['HCPID', 'FakeModel'] + m2_cols].drop_duplicates(), how='right')
+#     df_join = pd.merge(df_join1, df_join2, how='inner').sort_values(by=['HCPID', 'FakeModel'])
+#     return df_join
+#
+#
+#
+#         # ## TODO: update
+#         #
+#         # # join back to obtain full parameter info
+#         # df1 = pd.merge(df_model1, maxLL1, how='inner')
+#         # df2 = pd.merge(df_model2, maxLL2, how='inner')
+#         #
+#         # # join model1 maxLL and model2 maxLL
+#         # merge_cols = ['HCPID', 'FakeModel'] + MAXLL_FACTOR_VAR
+#         # df = pd.merge(df1, df2, on=merge_cols, suffixes=('.m1', '.m2')).sort_values(by='HCPID')
+#         #
+#         # # determine model class
+#         # # if LL.m1 > LL.m2 -> BestModel = m1
+#         # # else BestModel = m2
+#         # df['LL.diff'] = df.apply(lambda x: x['LL.m1'] - x['LL.m2'], axis=1)
+#         # df = df[merge_cols + [c for c in df.columns if c not in merge_cols]]
+#         # df['BestModel'] = df.apply(lambda x: 'model1' if x['LL.m1'] > x['LL.m2'] else 'model2', axis=1)
+#         #
+#         # return df
+
+def estimate_model_class_subject(main_dir, subject_dir):
     """
-    Estimate the model class
+
     """
+    m1_files = glob.glob(os.path.join(main_dir, subject_dir, '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model1'))))
+    m2_files = glob.glob(os.path.join(main_dir, subject_dir, '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model2'))))
 
-    # TODO: deal with path to make sure param_id is useable
-    try:
-        # single param_id
-        # all files starts with MODEL1- fake model1 and fake model2 estimated using model1
-        m1_files = glob.glob(
-            os.path.join(main_dir, subject_dir, '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model1'))))
-        m2_files = glob.glob(
-            os.path.join(main_dir, subject_dir, '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model2'))))
+    # concat maxLL for all subjects, all param ids
+    df_model1 = pd.concat([pd.read_csv(f, index_col=0) for f in m1_files], axis=0)
+    df_model2 = pd.concat([pd.read_csv(f, index_col=0) for f in m2_files], axis=0)
 
-        # concat maxLL for all subjects, all param ids
-        df_model1 = pd.concat([pd.read_csv(f, index_col=0) for f in m1_files], axis=0)
-        df_model2 = pd.concat([pd.read_csv(f, index_col=0) for f in m2_files], axis=0)
-    except:
-        # all param_id
-        m1_files = glob.glob(
-            os.path.join(main_dir, subject_dir, '*', '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model1'))))
-        m2_files = glob.glob(
-            os.path.join(main_dir, subject_dir, '*', '*', 'maxll', '%s-*-maxLL.csv' % (str.upper('model2'))))
+    # only select max LL for each subject, each model, across param_ids
+    maxLL1 = df_model1.groupby(['HCPID'])['LL'].max().reset_index()
+    maxLL2 = df_model2.groupby(['HCPID'])['LL'].max().reset_index()
 
-        # concat maxLL for all subjects, all param ids
-        df_model1 = pd.concat([pd.read_csv(f, index_col=0) for f in m1_files], axis=0)
-        df_model2 = pd.concat([pd.read_csv(f, index_col=0) for f in m2_files], axis=0)
+    # outer join maxLL1 and maxLL2
+    # each row is a fake subject
+    # LL.m1 is LL estimated by model1
+    # LL.m2 is LL estimated by model2
+    # BestModel is the determined by higher LL between LL.m1 and LL.m2
+    maxLL = pd.merge(maxLL1, maxLL2, how='outer', on=['HCPID'], suffixes=('.m1', '.m2'))
+    maxLL['LL.diff'] = maxLL.apply(lambda x: x['LL.m1'] - x['LL.m2'], axis=1)
+    maxLL['BestModel'] = maxLL.apply(lambda x: 'model1' if x['LL.m1'] > x['LL.m2'] else 'model2', axis=1)
 
-    finally:
-        # df_model1['BlockType'] = df_model1.apply(lambda x: pd.Categorical(x['BlockType'], categories=['MostlyReward', 'MostlyPunishment']))
-        df_model1['BlockType'] = pd.Categorical(df_model1['BlockType'], categories=df_model1['BlockType'].unique())
-        df_model1['TrialType'] = pd.Categorical(df_model1['TrialType'], categories=df_model1['TrialType'].unique())
-        df_model2['BlockType'] = pd.Categorical(df_model2['BlockType'], categories=df_model2['BlockType'].unique())
-        df_model2['TrialType'] = pd.Categorical(df_model2['TrialType'], categories=df_model2['TrialType'].unique())
+    # join back to obtain parameter and simulation data
+    m1_cols = [c for c in df_model1.columns if (c.endswith('.s') or c.endswith('.m'))]
+    m2_cols = [c for c in df_model2.columns if (c.endswith('.s') or c.endswith('.m'))]
 
-        # drop .s columns
-        m1_s_cols = [c for c in df_model1.columns if c.endswith('.s')]
-        m2_s_cols = [c for c in df_model2.columns if c.endswith('.s')]
-        df_model1_drops = df_model1.drop(columns=m1_s_cols)
-        df_model2_drops = df_model2.drop(columns=m2_s_cols)
-
-        # only select max LL for each subject, each model, across param_ids
-        # df1 = df_model1.groupby(['HCPID', 'FakeModel']).agg({'LL':'max'}).reset_index() #.agg(LL = ('LL', 'max')).reset_index()
-        # df2 = df_model2.groupby(['HCPID', 'FakeModel']).agg({'LL':'max'}).reset_index() #.agg(LL = ('LL', 'max')).reset_index()
-        maxLL1 = df_model1_drops.groupby(['HCPID', 'FakeModel'])['LL'].max().reset_index()
-        maxLL2 = df_model2_drops.groupby(['HCPID', 'FakeModel'])['LL'].max().reset_index()
-
-        # outer join maxLL1 and maxLL2
-        # each row is a fake subject
-        # LL.m1 is LL estimated by model1
-        # LL.m2 is LL estimated by model2
-        # BestModel is the determined by higher LL between LL.m1 and LL.m2
-        maxLL = pd.merge(maxLL1, maxLL2, how='outer', on=['HCPID', 'FakeModel'], suffixes=('.m1', '.m2'))
-        maxLL['LL.diff'] = maxLL.apply(lambda x: x['LL.m1'] - x['LL.m2'], axis=1)
-        maxLL['BestModel'] = maxLL.apply(lambda x: 'model1' if x['LL.m1'] > x['LL.m2'] else 'model2', axis=1)
-
-        # join back to obtain parameter and simulation data
-        m1_cols = [c for c in df_model1.columns if (c.endswith('.s') or c.endswith('.m'))]
-        m2_cols = [c for c in df_model2.columns if (c.endswith('.s') or c.endswith('.m'))]
-
-        df_join1 = pd.merge(maxLL, df_model1[['HCPID', 'FakeModel'] + m1_cols].drop_duplicates(), how='right')
-        df_join2 = pd.merge(maxLL, df_model2[['HCPID', 'FakeModel'] + m2_cols].drop_duplicates(), how='right')
-        df_join = pd.merge(df_join1, df_join2, how='inner').sort_values(by=['HCPID', 'FakeModel'])
-        return df_join
+    df_join1 = pd.merge(maxLL, df_model1[['HCPID'] + m1_cols].drop_duplicates(), how='right')
+    df_join2 = pd.merge(maxLL, df_model2[['HCPID'] + m2_cols].drop_duplicates(), how='right')
+    df_join = pd.merge(df_join1, df_join2, how='inner').sort_values(by=['HCPID'])
+    return df_join
 
 
+def estimate_model_class_pr(main_dir, subject_dir, subject_id, param_id):
+    """
+    Estimate model class for each fake subject
+    """
+    # all files starts with MODEL1- fake model1 and fake model2 estimated using model1
+    m1_files = glob.glob(
+        os.path.join(main_dir, subject_dir, subject_id, param_id, 'maxll', '%s-*-maxLL.csv' % (str.upper('model1'))))
+    m2_files = glob.glob(
+        os.path.join(main_dir, subject_dir, subject_id, param_id, 'maxll', '%s-*-maxLL.csv' % (str.upper('model2'))))
 
-        # ## TODO: update
-        #
-        # # join back to obtain full parameter info
-        # df1 = pd.merge(df_model1, maxLL1, how='inner')
-        # df2 = pd.merge(df_model2, maxLL2, how='inner')
-        #
-        # # join model1 maxLL and model2 maxLL
-        # merge_cols = ['HCPID', 'FakeModel'] + MAXLL_FACTOR_VAR
-        # df = pd.merge(df1, df2, on=merge_cols, suffixes=('.m1', '.m2')).sort_values(by='HCPID')
-        #
-        # # determine model class
-        # # if LL.m1 > LL.m2 -> BestModel = m1
-        # # else BestModel = m2
-        # df['LL.diff'] = df.apply(lambda x: x['LL.m1'] - x['LL.m2'], axis=1)
-        # df = df[merge_cols + [c for c in df.columns if c not in merge_cols]]
-        # df['BestModel'] = df.apply(lambda x: 'model1' if x['LL.m1'] > x['LL.m2'] else 'model2', axis=1)
-        #
-        # return df
+    # concat maxLL for all subjects, all param ids
+    df_model1 = pd.concat([pd.read_csv(f, index_col=0) for f in m1_files], axis=0)
+    df_model2 = pd.concat([pd.read_csv(f, index_col=0) for f in m2_files], axis=0)
 
+    df_model1['BlockType'] = pd.Categorical(df_model1['BlockType'], categories=df_model1['BlockType'].unique())
+    df_model1['TrialType'] = pd.Categorical(df_model1['TrialType'], categories=df_model1['TrialType'].unique())
+    df_model2['BlockType'] = pd.Categorical(df_model2['BlockType'], categories=df_model2['BlockType'].unique())
+    df_model2['TrialType'] = pd.Categorical(df_model2['TrialType'], categories=df_model2['TrialType'].unique())
 
-def run_maxLL_pr_pipline(main_dir, subject_dir, param_list, overwrite):
+    # drop .s columns
+    m1_s_cols = [c for c in df_model1.columns if c.endswith('.s')]
+    m2_s_cols = [c for c in df_model2.columns if c.endswith('.s')]
+    df_model1_drops = df_model1.drop(columns=m1_s_cols)
+    df_model2_drops = df_model2.drop(columns=m2_s_cols)
+
+    # only select max LL for each subject, each model, across param_ids
+    maxLL1 = df_model1_drops.groupby(['HCPID', 'FakeModel'])['LL'].max().reset_index()
+    maxLL2 = df_model2_drops.groupby(['HCPID', 'FakeModel'])['LL'].max().reset_index()
+
+    maxLL = pd.merge(maxLL1, maxLL2, how='outer', on=['HCPID', 'FakeModel'], suffixes=('.m1', '.m2'))
+    maxLL['LL.diff'] = maxLL.apply(lambda x: x['LL.m1'] - x['LL.m2'], axis=1)
+    maxLL['BestModel'] = maxLL.apply(lambda x: 'model1' if x['LL.m1'] > x['LL.m2'] else 'model2', axis=1)
+
+    m1_cols = [c for c in df_model1.columns if (c.endswith('.s') or c.endswith('.m'))]
+    m2_cols = [c for c in df_model2.columns if (c.endswith('.s') or c.endswith('.m'))]
+
+    df_join1 = pd.merge(maxLL, df_model1[['HCPID', 'FakeModel'] + m1_cols].drop_duplicates(), how='right')
+    df_join2 = pd.merge(maxLL, df_model2[['HCPID', 'FakeModel'] + m2_cols].drop_duplicates(), how='right')
+    df_join = pd.merge(df_join1, df_join2, how='inner').sort_values(by=['HCPID', 'FakeModel'])
+    df_join['param_id'] = param_id
+    return df_join
+
+def run_maxLL_pr_pipline(main_dir, subject_dir, param_list, overwrite, analysis_type='pr_best'):
     """
     Run one simulation for parameter recovery analysis
 
@@ -752,7 +903,7 @@ def run_maxLL_pr_pipline(main_dir, subject_dir, param_list, overwrite):
                            overwrite=False)
 
     # combine maxLL
-    save_model_classification(main_dir=main_dir, subject_dir=subject_dir, param_list=param_list)
+    save_model_classification(main_dir=main_dir, subject_dir=subject_dir, param_list=param_list, analysis_type=analysis_type)
 
 def save_maxLL_pr_data(main_dir, log_dir, subject_id, param_id, model, model_fake_subject, overwrite=False):
     """
