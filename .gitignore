@@ -4,3 +4,8 @@
 /data/*
 */__pycache__
 /.idea
+.Rproj.user
+analysis/*cache/
+analysis/*files/
+*.Rproj
+*.Rhistory
