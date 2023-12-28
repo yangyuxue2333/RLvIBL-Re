@@ -74,7 +74,7 @@ rm(list=ls())
 
 -   Z norm before load: False
 
--   upsampling: **UP**
+-   sampling method: **shuffle**
 
 # Load Data
 
@@ -133,20 +133,25 @@ rest_subjects <- rest_subjects %>%
 ```
 
 ```{r}
-dvs <- read_csv("../data/actr_maxLL.csv",
+
+dvs <- read_csv("../data/LL_model2.csv", #read_csv("../data/actr_maxLL.csv", 
                 col_types = cols(
                   .default = col_double(),
                   HCPID = col_character(),
-                  BestModel = col_character(), 
-                  LL.diff = col_double()
+                  best.model = col_character(), 
+                  diff.LL = col_double()
                 )) %>% 
   # find common subject ID that both rest and task data are available
   inner_join(rest_subjects, by = "HCPID") %>%
+  # exclude bad subjects that are hard to distinguish by two models
+  #anti_join(bad_subj, by = "HCPID") %>%
+  mutate(BestModel = best.model, LL.diff = diff.LL) %>%
   dplyr::select(HCPID, BestModel, LL.diff) %>%
   arrange(HCPID) %>%
   mutate(Y = as.numeric(as.factor(BestModel)) -1,  # model1 = 0, model2 = 1
          HCPID = factor(HCPID), 
          BestModel=factor(BestModel))
+
 
 dvs %>% group_by(BestModel) %>% count()
 ```
@@ -154,21 +159,38 @@ dvs %>% group_by(BestModel) %>% count()
 Up-sampling: make sure equal group members
 
 ```{r}
-dvs.up <- groupdata2::upsample(
+set.seed(0) # For reproducibility
+
+sample_method <-  "up" # methods are: random, up, none
+
+if (sample_method == "random") {
+  dvs.sampling <- dvs
+  dvs.sampling$BestModel <-  sample(dvs$BestModel)
+} else if (sample_method. == "up") {
+  dvs.sampling <- groupdata2::upsample(
   dvs,
   cat_col = "BestModel",
   id_col = "HCPID",
   id_method = "n_ids", 
-  mark_new_rows = FALSE
+  mark_new_rows = T
 )
 
-dvs.up %>% group_by(BestModel) %>% count()
+}else if (sample_method == "none") {
+  dvs.sampling <- dvs
+  # No changes made to the dataset in this condition
+} else {
+  print("Invalid sample_method. Please choose from: random, up, none")
+}
+
+dvs.sampling %>% group_by(BestModel) %>% count()
+
+
 ```
 
 
 Find common subjects ids
 ```{r}
-common_subjects <- dvs.up %>% left_join(rest_subjects)
+common_subjects <- dvs.sampling %>% left_join(rest_subjects)
 common_subject_ids <- common_subjects$subject_id
 ```
 Find subject ID that both rest and task data are available. We have common subjects: N = `r length(common_subject_ids)`
@@ -355,7 +377,7 @@ Finally, we transform the dependent variable $Y$ into a binary numeric
 variable with values $(0, 1)$, so that we can use logistic regression.
 
 ```{r}
-Y <- dvs.up$Y
+Y <- dvs.sampling$Y
 ```
 
 > Quality and Characteristics of $X$ and $Y$

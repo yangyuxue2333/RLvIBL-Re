@@ -137,7 +137,7 @@ min_max_norm <- function(x) {
 
 
 # obtain weights based on the absolute value of maxLL diff between model1 and model2
-W <- min_max_norm(abs(dvs.up$LL.diff))
+W <- min_max_norm(abs(dvs.sampling$LL.diff))
  
 ```
 
