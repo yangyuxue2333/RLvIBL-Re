@@ -1,7 +1,8 @@
 /*/.ipynb_checkpoints/
 /*/*/.ipynb_checkpoints/
 /*/__old__/
-/data/*
+/data/__cache__
+/data/connectivity_matrix
 */__pycache__
 /.idea
 .Rproj.user
@@ -9,3 +10,4 @@ analysis/*cache/
 analysis/*files/
 *.Rproj
 *.Rhistory
+data.zip

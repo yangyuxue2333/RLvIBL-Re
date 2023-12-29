@@ -1,0 +1,372 @@
+---
+title: "LASSO R"
+date: "`r Sys.Date()`"
+author: "Cher Yang"
+output:
+  html_document:
+    code_folding: hide
+    theme: yeti
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+  word_document:
+    toc: yes
+    toc_depth: '3'
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(ggthemes)
+library(ppcor)
+library(reshape2)
+library(groupdata2)
+library(knitr)       # kable()
+
+#library(gglasso)
+library(glmnet)
+library(ggsci)
+library(viridis)
+library(ggExtra)
+library(kableExtra)
+library(xtable)
+library(ggrepel)
+library(scales)
+library(car)
+library(pROC)
+library(patchwork)      # Multi-plot alignment
+library(brainconn)
+library(igraph)
+library(network)
+library(brainconn)
+library(brainGraph)
+library(RColorBrewer)
+library(networkD3)
+library(ggpubr)
+library(DescTools)
+library(plotly)
+#library(data.table)
+library(rsample)   
+library(purrr)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(mlbench)
+library(kernlab)
+library(sessioninfo)
+rm(list=ls())
+```
+
+**Analysis parameters:**
+
+*rsfMRI data Parameters:*
+
+```{r}
+sample_method <-  "shuffle" # methods are: up, down, shuffle, none
+```
+
+-   rsfMRI: R1S1 mr_pcorr.txt file
+
+-   Z norm before load: False
+
+-   sampling method:  `r sample_method`
+
+# Load Data
+
+```{r}
+X <- read_csv("../data/X.csv", col_types = cols(.default = col_double()))
+Y <- read_csv("../data/Y.csv", col_types = cols(.default = col_double())) %>% rename(y = x)
+Y %>% group_by(y) %>% count()
+```
+
+```{r}
+# rest data subjects
+rest_subjects = as.data.frame(x  = Sys.glob(paths = "../data/connectivity_matrix/REST1/*")) 
+colnames(rest_subjects) <- c('subject_id')  
+
+# clean subject id
+rest_subjects <- rest_subjects %>%
+  mutate(subject_id = purrr::map_chr(subject_id, ~strsplit(., "/")[[1]][5])) %>%
+  mutate(HCPID = paste(str_replace(subject_id, pattern = "sub-", ""), sep = "_", "fnca"))
+
+dvs <- read_csv("../data/LL_model2.csv", #read_csv("../data/actr_maxLL.csv", 
+                col_types = cols(
+                  .default = col_double(),
+                  HCPID = col_character(),
+                  best.model = col_character(), 
+                  diff.LL = col_double()
+                )) %>% 
+  # find common subject ID that both rest and task data are available
+  inner_join(rest_subjects, by = "HCPID") %>%
+  # exclude bad subjects that are hard to distinguish by two models
+  #anti_join(bad_subj, by = "HCPID") %>%
+  mutate(BestModel = best.model, LL.diff = diff.LL) %>%
+  dplyr::select(HCPID, BestModel, LL.diff) %>%
+  arrange(HCPID) %>%
+  mutate(Y = as.numeric(as.factor(BestModel)) -1,  # model1 = 0, model2 = 1
+         HCPID = factor(HCPID), 
+         BestModel=factor(BestModel))
+
+
+
+# based on proportion of two labels
+W <- Y
+W[W == 0] <- mean(Y)
+W[W == 1] <- (1-mean(Y))
+
+# normalize maxLL diff
+min_max_norm <- function(x) {
+    (x - min(x)) / (max(x) - min(x))
+}
+
+
+# obtain weights based on the absolute value of maxLL diff between model1 and model2
+W <- min_max_norm(abs(dvs$LL.diff))
+```
+
+
+```{r}
+merged_data <- cbind(merge(X, Y, by = "...1")[, -1], W)
+```
+
+## Sampling
+```{r}
+set.seed(0) # For reproducibility
+
+
+if (sample_method == "shuffle") {
+  sampled_data <- merged_data
+  shuffle_rows <- sample(1:length(rownames(merged_data)))
+  sampled_data$y <- merged_data$y[shuffle_rows]
+  sampled_data$W <- merged_data$W[shuffle_rows]
+} else if (sample_method == "up") {
+  sampled_data <- groupdata2::upsample(
+    data = merged_data, 
+    id_method = "n_rows_c",
+    cat_col = "y")
+} else if (sample_method == "down") {
+  sampled_data <- groupdata2::downsample(
+  merged_data,
+  id_method = "n_rows_c",
+  cat_col = "y")
+  
+} else if (sample_method == "none") {
+  sampled_data <- merged_data
+  
+} else {
+  print("Invalid sample_method. Please choose from: random, up, up_random, none")
+}
+
+
+sampled_data %>% group_by(y) %>% count()
+
+```
+```{r}
+Y.sampled <- sampled_data$y
+W.sampled <- sampled_data$W
+X.sampled <- sampled_data[, !names(sampled_data) %in% c("y", "W")]
+```
+
+## Train/Test Split
+```{r}
+set.seed(0)  # Set seed for reproducibility
+
+indices <- 1:nrow(X.sampled)
+
+# Sample 80% of the indices for training
+train_indices <- sample(indices, 0.8 * length(indices), replace = FALSE)
+
+# Create training and testing sets
+X_train <- X.sampled[train_indices, ]
+Y_train <- Y.sampled[train_indices]
+W_train <- W.sampled[train_indices]
+
+X_test <- X.sampled[-train_indices, ]
+Y_test <- Y.sampled[-train_indices]
+W_test <- W.sampled[-train_indices]
+
+```
+
+> Quality and Characteristics of $X$ and $Y$
+
+Let's do some visualization and analysis of our indepedenent and
+dependet variables, just to ensure there are no obvious problems.
+
+> Collinearity of Connectivity Regressors $X$
+
+The regressors $X$ is certainly multi-collinear; that is a consequence
+of having a large number of predictors $p > n$, which, in turn, is one
+of the reasons why we are using Lasso. Too much collinearity, however,
+could be really bad and push Lasso towards selecting non-optimal
+regressors. To gather a sense of how much collinearity we have, we can
+plot the distribution of correlations among regressors:
+
+```{r}
+corX <- cor(X)
+distCor <- as_vector(corX[lower.tri(corX, diag = F)])
+distTibble <- as_tibble(data.frame(R=distCor))
+
+ggplot(distTibble, aes(x=R)) +
+  geom_histogram(col="white", alpha=0.5, binwidth = 0.05) +
+  theme_pander() +
+  ylab("Number of Correlations") +
+  xlab("Correlation Value") +
+  ggtitle("Distribution of Correlation Values Between Regressors")
+```
+
+# Run LASSO Model
+
+LOO on training data, evaluate on testing data
+
+
+```{r}
+
+  # LOO CV to find optimal lambda
+  fit.cv <- cv.glmnet(y = Y_train,
+                      x = as.matrix(X_train),
+                      alpha=1,
+                      family = "binomial",
+                      weights = W_train,
+                      type.measure = "class",
+                      standardize=T,
+                      nfolds=length(Y_train),
+                      grouped = F, 
+                      keep = T)
+
+  best_model <- glmnet(y = Y_train,
+              x = as.matrix(X_train),
+              alpha=1,
+              lambda = fit.cv$lambda.min,
+              weights = W_train,
+              family = "binomial",
+              type.measure = "class",
+              standardize = T)
+
+```
+
+Now, let's look at the cross-validation error profile.
+
+```{r}
+plot(fit.cv)
+```
+
+
+### Model Evaluation
+
+```{r}
+
+plot_roc <- function(Y, Yp, predictions, roc_score) {
+  wcomparison <- tibble(Observed = Y,
+                    Predicted = Yp,
+                    DiscretePredicted = predictions)
+            
+  wcomparison %<>% mutate(Accuracy = ifelse(DiscretePredicted == Observed,
+                                            "Correct", 
+                                            "Misclassified")) %>% drop_na()
+  wcomparison %<>% mutate(ROCPrediction = if_else(Predicted < .5, 0, 1))
+
+  rocobj <- roc(wcomparison$Observed, wcomparison$ROCPrediction) 
+  
+
+  g <- ggroc(rocobj, col="red") +
+    geom_point(aes(y=rocobj$sensitivities, x=rocobj$specificities), col="red", size=4, alpha=.5) +
+    ggtitle(paste("AUC ROC Curve", roc_score)) +
+    xlab("Specificity (FPR)") + ylab("Sensitivity (TPR)") + 
+    geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color="grey", linetype="dashed") +
+    theme_pander()
+
+  g
+}
+
+plot_accuracy <- function(Y, Yp, predictions, accuracy_score) {
+  wcomparison <- tibble(Observed = Y,
+                      Predicted = Yp,
+                      DiscretePredicted = predictions)
+              
+  wcomparison %<>% mutate(Accuracy = ifelse(DiscretePredicted == Observed,
+                                            "Correct", 
+                                            "Misclassified")) %>% drop_na()
+    
+  aval <- round(100*nrow(dplyr::filter(wcomparison, Accuracy %in% "Correct")) / nrow(wcomparison),2)
+  
+
+  p <- ggplot(wcomparison, aes(x=Predicted, y=Observed, 
+                               col=Accuracy)) +
+    geom_point(size=4, alpha=0.6, 
+               position= position_jitter(height = 0.02)) +
+    geom_abline(intercept = 0, slope = 1, 
+                col="red",
+                linetype="dashed") +
+    scale_color_d3() +
+    theme_pander() +
+  
+    theme(legend.position = "right") +
+    guides(col=guide_legend("Classification")) +
+    coord_fixed(xlim=c(0, 1), ylim=c(0, 1)) +
+    annotate("text", x=0.3, y=0.7,
+             label=paste("Accuracy (",
+                         length(Y),
+                         ") = ",
+                         accuracy_score,
+                         "%",
+                         sep="")) +
+    ylab("Observed Strategy") +
+    xlab("Predicted Strategy") +
+    ggtitle(paste("Predicted vs. Observation")) +
+    theme(legend.position = "bottom")
+    
+    ggMarginal(p, 
+               fill="grey", 
+               alpha=0.75,
+               type="density", #bins=13, 
+               col="darkgrey",
+               margins = "both")
+    
+    return (p)
+}
+```
+
+```{r}
+predictions <- predict(best_model, 
+               newx = as.matrix(X_test),
+               weights =W_test,
+               s=fit.cv$lambda.min,
+               type="class", family = "binomial")%>% as.numeric()
+Yp <- predict(best_model, 
+               newx = as.matrix(X_test),
+               weights =W_test,
+               s=fit.cv$lambda.min,
+               type="response", family = "binomial")%>% as.numeric()
+
+
+# Compute accuracy
+accuracy_score <- round(mean(predictions == Y_test), 4) * 100
+plot_accuracy(Y=Y_test, 
+              Yp=Yp, 
+              predictions=predictions,  
+              accuracy_score = accuracy_score) 
+```
+
+```{r}
+
+roc_obj <- roc(Y_test, predictions)
+roc_score <- round(auc(roc_obj), 4)
+
+# Plot ROC curve
+plot_roc(Y=Y_test, 
+         Yp=Yp, 
+         predictions = predictions,
+         roc_score = roc_score)
+
+```
+
+
