@@ -28,7 +28,7 @@ As a task, we are using the "Incentive Processing" task of the Human Connectome 
 
 * Data are in `./data`
 
-### Run simulation
+### Run simulation (deprecated)
 
 In this task, the order of trial stimuli has been fixed by each subject. So in order to run one simulation, 
 you need to specify the subject number (i.e. `100307_fnca`). 
@@ -46,7 +46,7 @@ To run one round of simulation, go to `./script`
              log_dir=False, 
              special_suffix="")
 
-### Run MaxLL analysis
+### Run MaxLL analysis (deprecated)
 To estimate best fit model, we use maxLL approach
 
 Go to `/script`, run python script
@@ -54,7 +54,7 @@ Go to `/script`, run python script
     python -m run_maxLL.py
     
 
-### Run parameter recovery analysis
+### Run parameter recovery analysis (deprecated)
 
 Parameter recovery analysis: select a random set of parameter combination P, run 1 simulation for both model. 
 Using the simulated output as fake subject data and feed into maxLL pipline to find the best fit parameter P'.
@@ -98,18 +98,9 @@ Run one simulation for each participant with random combination of parameter
 ---
 ## Data
 
-Subject data and simulation results are saved in data director
+rsfMRI preprocessed data are saved in data director
 
-- `data/gambling_trials`: contain the stimuli order sequence for each subject
-
-- `data/model_output_local`: contains the grid-search model simulation outputs
-
-- `data/subject_data`:contains HCP subject data (reformatted)
-    - `subject.csv`: reformat version of subject beh data
-    - `100307_fnca/aggregate`: subject data aggregated by BlockType and Trial Type
-    - `100307_fnca/likelihood`: model1 and model2 simulation data aggregated by same grouping var
-    - `100307_fnca/maxll`: contains highest maxLL for each model and some intermediate steps
-        - `/MODEL1.csv`: contains LL for all parameters 
-        - `/MODEL1-maxLL.csv`: contains beh patterns for the best fit parameter
-        - `/MODEL1-100307_fnca-merged.csv`: intermediate outputs. merged dataframe between model + subejct
-    
+- `data/X.csv`: predictors
+- `data/Y.csv`: class labels
+- `data/LL_model2.csv`: LogLikelihood data from ACTR model simulation
+- `data/power_2011.csv`: functional connectivity parcellation by Power et al. (2011)
