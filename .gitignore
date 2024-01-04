@@ -2,7 +2,7 @@
 /*/*/.ipynb_checkpoints/
 /*/__old__/
 /data/__cache__
-/data/connectivity_matrix
+/data/input_data/connectivity_matrix
 */__pycache__
 /.idea
 .Rproj.user
@@ -11,3 +11,5 @@ analysis/*files/
 *.Rproj
 *.Rhistory
 data.zip
+analysis/old/*
+data/input_data/C.csv

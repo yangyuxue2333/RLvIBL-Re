@@ -1,0 +1,365 @@
+---
+title: "Analysis Lasso-Re (Connectom)"
+date: "`r Sys.Date()`"
+author: "Cher Yang"
+output:
+  html_document:
+    code_folding: hide
+    theme: yeti
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+  word_document:
+    toc: yes
+    toc_depth: '3'
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = FALSE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(dplyr)
+library(magrittr)
+library(ggplot2)
+library(ggthemes)
+library(ppcor)
+library(reshape2)
+#library(gglasso)
+library(glmnet)
+library(ggsci)
+library(viridis)
+library(ggExtra)
+library(kableExtra)
+library(xtable)
+library(ggrepel)
+library(scales)
+library(car)
+library(pROC)
+library(patchwork)      # Multi-plot alignment
+library(brainconn)
+library(igraph)
+library(network)
+library(brainconn)
+library(brainGraph)
+library(RColorBrewer)
+library(networkD3)
+library(ggpubr)
+library(DescTools)
+library(plotly)
+#library(data.table)
+library(rsample)   
+library(purrr)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(mlbench)
+library(kernlab)
+library(sessioninfo)
+
+library(circlize)
+
+rm(list=ls())
+```
+
+
+# Load Data 
+
+
+```{r}
+B <- read_csv("../data/B.csv") %>% rename(b = s0)
+load(file = "../data/I.RData")
+load(file = "../data/C.RData")
+load(file = "../data/order.RData")
+power2011 <- read_csv("../data/power_2011.csv")  
+```
+
+## Connectom
+
+```{r}
+conn_betas <- as_tibble(data.frame(index=I$index, Beta=B$b))
+connectome <- order %>%
+  filter(index %in% I$index) %>%
+  inner_join(conn_betas) %>%
+  dplyr::select(-censor2) %>%
+  filter(Beta != 0) %>% 
+  separate(connection, c("connection1", "connection2"))%>%
+  separate(network, sep = "-", c("network1", "network2"), remove = F) %>% 
+  mutate(network1 = ifelse(str_detect(network, pattern = "-1-"), -1, network1)) %>%
+  mutate(connection_type = ifelse(network1==network2, "Within", "Between")) %>%
+  arrange(index)
+
+
+# HARD CODE
+connectome[connectome$network=="-1-5","network2"] <- "5"
+connectome[connectome$network=="-1-7","network2"] <- "7"
+connectome[connectome$network=="-1--1","network2"] <- "-1"
+connectome[connectome$network=="-1-11","network2"] <- "11"
+connectome[connectome$network=="-1-12","network2"] <- "12"
+connectome[connectome$network=="-1-13","network2"] <- "13"
+```
+
+```{r}
+connectome %>% 
+  mutate(beta_sign = ifelse(Beta >0, "+", "-")) %>%
+  ggdotchart(x = "network_names", y = "Beta",
+           color = "beta_sign",                                # Color by groups
+           palette = c("steelblue", "tomato"), # Custom color palette
+           rotate = TRUE,
+           facet.by = "connection_type", 
+           sort.by.groups = F,
+           sort.val = "desc",          # Sort the value in descending order
+           sorting = "descending",                       # Sort value in descending order
+           add = "segments",                             # Add segments from y = 0 to dots
+           add.params = list(color = "lightgray", size = 2), # Change segment color and size
+           group = "connection_type",                                # Order by groups
+           dot.size = 3,                                 # Large dot size
+           #label = round(connectome$Beta,2),                        # Add mpg values as dot labels
+           #font.label = list(color = "white", size = 9,
+           #                  vjust = 0.5),               # Adjust label parameters
+           #group = "cyl",
+           #y.text.col = TRUE,
+           title = paste("Lasso Connection Weights:", dim(connectome)[[1]]),
+           ggtheme = theme_pander()) +
+  geom_hline(yintercept = 0, linetype = 2, color = "black")
+   
+```
+
+
+# Brain Network Analysis (Power)
+
+## A Matrix
+
+To calculate the averaged corr matrix A
+
+1)  find the Fisher's Z values of the corresponding Pearson correlation
+    coefficients
+2)  Average them
+3)  Find the reverse Fisher's Z transform of that average value.
+
+```{r}
+C.z <- FisherZ(C)
+C.zmean <- matrix(colMeans(C.z), nrow=264, ncol = 264)
+A <- FisherZInv(C.zmean)
+A.vec <- as.vector(A)
+```
+
+## W Matrix
+
+Calculate W from betas and A Matrix
+
+```{r}
+connectom2matrix <- function(connectome, w) {
+  empty_mat <- matrix(0, 264, 264, dimnames = list(paste0("X", 1:264), paste0("X", 1:264))) 
+  empty_mat[connectome$index] <- connectome$W
+  return(empty_mat)
+}
+
+# convert a 264*264 matrix back to connectom df
+matrix2connectom <- function(mat, connectome, col_name) {
+  connectome$temp = mat[connectome$index]
+  connectome <- rename(connectome, !!col_name := temp)
+  return(connectome)
+}
+
+# make the matrix symmetric
+make_symmetric <- function(m) {
+  # lower.tri is 0.0
+  m[lower.tri(m)] <- t(m)[lower.tri(m)]
+  return(m)
+}
+
+power_atals <- power2011 %>% 
+  rename(ROI.Name = ROI, x.mni=X, y.mni=Y, z.mni=Z, network=NetworkName) %>% 
+  mutate(ROI.Name=as.integer(ROI.Name), index = as.integer(ROI.Name),
+         x.mni=as.integer(x.mni), y.mni=as.integer(y.mni), z.mni=as.numeric(z.mni)) %>%
+  dplyr::select(ROI.Name, x.mni, y.mni, z.mni, network, index)
+
+check_atlas(power_atals)
+```
+
+
+
+```{r} 
+
+connectome_data <- connectome
+Wconnectome <- connectome_data %>%
+  mutate(A = A.vec[connectome_data$index], W = A*Beta)
+
+W_mat <- matrix(0, ncol = 264, nrow = 264)
+W_mat[Wconnectome$index] <- Wconnectome$W
+W_mat <- make_symmetric(W_mat) #CHECKED correct W_mat
+
+
+rownames(W_mat) = power_atals$network
+colnames(W_mat) = power_atals$network
+```
+
+## Declarative Network 
+
+```{r}
+power_color = power2011 %>% 
+  #filter(NetworkName!="Sensory/somatomotor Mouth") %>%
+  select(NetworkName, Color) %>% 
+  distinct() 
+
+colors <- c(Uncertain = power_color$Color[9], #power_color$Color[1], 
+            `Sensory/somatomotor Hand` = power_color$Color[6], #power_color$Color[2], 
+            `Cingulo-opercular Task Control` = power_color$Color[3],
+            Auditory = power_color$Color[4],
+            `Default mode` = power_color$Color[5], 
+            `Memory retrieval?` = power_color$Color[2], #power_color$Color[6],
+            `Ventral attention` = power_color$Color[7], 
+            Visual = power_color$Color[8],
+            `Fronto-parietal Task Control` = power_color$Color[1], #power_color$Color[9],
+            Salience = power_color$Color[10],
+            Subcortical = power_color$Color[11], 
+            Cerebellar = power_color$Color[12], 
+            `Dorsal attention` = power_color$Color[13])
+
+
+my_palette <- c(
+  "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+  "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+  "#aec7e8", "#ffbb78", "#98df8a", "#ff9896"
+)
+
+colors <- c(
+  Uncertain = my_palette[1], 
+  `Sensory/somatomotor Hand` = my_palette[2],  
+  `Cingulo-opercular Task Control` = my_palette[3],
+  Auditory = my_palette[4],
+  `Default mode` = my_palette[5], 
+  `Memory retrieval?` = my_palette[6], 
+  `Ventral attention` = my_palette[7], 
+  Visual = my_palette[8],
+  `Fronto-parietal Task Control` = my_palette[9], 
+  Salience = my_palette[10],
+  Subcortical = my_palette[11], 
+  Cerebellar = my_palette[12], 
+  `Dorsal attention` = my_palette[13]
+)
+
+
+
+```
+
+
+```{r} 
+circos.clear()
+chordDiagram(W_mat, directional = FALSE, transparency = 0.5, self.link = 1, 
+             symmetric = TRUE, scale = TRUE, reduce = FALSE, 
+             order = unique(power2011$NetworkName),  
+             preAllocateTracks = 1,
+             annotationTrackHeight = mm_h(c(10, 10)),
+             annotationTrack = c("grid"),
+             grid.col = colors, col = ifelse(W_mat>0, "tomato", "steelblue"))
+title("Connectome Network",  cex.main = 2)
+circos.trackPlotRegion(track.index = 1, panel.fun = function(x, y) {
+  xlim = get.cell.meta.data("xlim")
+  ylim = get.cell.meta.data("ylim")
+  sector.name = get.cell.meta.data("sector.index")
+  circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(0, 0.5))
+  circos.axis(h = "top", labels.cex = 0.5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+}, bg.border = NA)
+```
+
+```{r}
+png(filename = "./figure/connectome.png",  bg = "transparent", 
+    width = 1200 , height = 1200, 
+    units = "px", res = 150)
+
+# Clear any existing circos plot
+circos.clear()
+
+# Create a chord diagram using chordDiagram function
+chordDiagram(
+  W_mat, directional = FALSE, transparency = 0.5, self.link = 1,
+  symmetric = TRUE, scale = TRUE, reduce = FALSE,
+  order = unique(power2011$NetworkName),
+  preAllocateTracks = 1,
+  annotationTrackHeight = mm_h(c(10, 10)),
+  annotationTrack = c("grid"),
+  grid.col = colors,  # Assigns colors to grid lines
+  col = ifelse(W_mat > 0, "tomato", "steelblue")  # Assigns colors to connections
+)
+
+# Add a title to the plot
+title("Connectome Network", cex.main = 2)
+
+# Add text labels and axes to the plot regions
+circos.trackPlotRegion(
+  track.index = 1,
+  panel.fun = function(x, y) {
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1] + .1, sector.name, facing = "inside", niceFacing = TRUE, adj = c(.2, -1))
+    circos.axis(h = "top", labels.cex = .5, major.tick.percentage = 0.2, sector.index = sector.name, track.index = 2)
+  },
+  bg.border = NA
+)
+
+```
+
+
+
+
+```{r width=15}
+SAVE_PLOT = F
+
+if (SAVE_PLOT) {
+  png(filename = "./figure/connectome1.png",  bg = "transparent", 
+    width = 800 , height = 800, 
+    units = "px", res = 150)
+  
+  circos.clear()
+  chordDiagram(W_mat, directional = FALSE, transparency = 0.5, self.link = 1, 
+             symmetric = TRUE, scale = TRUE, reduce = FALSE, 
+             annotationTrackHeight = mm_h(c(15, 1)),
+             annotationTrack = c("grid"),
+             grid.col = colors, col = ifelse(W_mat>0, "tomato", "#00000000")) 
+  title("Predictive Group: Declarative (W > 0)", outer = F, cex.main = 1.5)
+} else {
+  circos.clear()
+  chordDiagram(W_mat, directional = FALSE, transparency = 0.5, self.link = 1, 
+             symmetric = TRUE, scale = TRUE, reduce = FALSE, 
+             #annotationTrackHeight = mm_h(c(15, 1)),
+             #annotationTrack = c("grid"),
+             grid.col = colors, col = ifelse(W_mat>0, "tomato", "#00000000")) 
+  title("Predictive Group: Declarative (W > 0)", outer = F, cex.main = 1.5)
+  
+  }
+
+
+```
+
+
+
+```{r width=15}
+if (SAVE_PLOT) {
+  png(filename = "./figure/connectome2.png",  bg = "transparent", 
+    width =800 , height = 800, 
+    units = "px", res = 150)
+
+  circos.clear()
+  chordDiagram(W_mat, directional = FALSE, transparency = 0.5, self.link = 1, 
+               symmetric = TRUE, scale = TRUE, reduce = FALSE, 
+               annotationTrackHeight = mm_h(c(15, 1)),
+               annotationTrack = c("grid"),
+               grid.col = colors, col = ifelse(W_mat<0, "steelblue", "#00000000"))
+  title("Predictive Group: Procedural (W < 0)", outer = F, cex.main = 1.5) 
+  } else {
+  circos.clear()
+  chordDiagram(W_mat, directional = FALSE, transparency = 0.5, self.link = 1, 
+               symmetric = TRUE, scale = TRUE, reduce = FALSE, 
+               #annotationTrackHeight = mm_h(c(15, 1)),
+               #annotationTrack = c("grid"),
+               grid.col = colors, col = ifelse(W_mat<0, "steelblue", "#00000000"))
+  title("Predictive Group: Procedural (W < 0)", outer = F, cex.main = 1.5)
+}
+```

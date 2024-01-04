@@ -64,6 +64,8 @@ library(mlbench)
 library(kernlab)
 library(sessioninfo)
 rm(list=ls())
+
+dest_dir <- "../data/result_data"
 ```
 
 **Analysis parameters:**
@@ -71,7 +73,8 @@ rm(list=ls())
 *rsfMRI data Parameters:*
 
 ```{r}
-sample_method <-  "shuffle" # methods are: up, down, shuffle, none
+sample_method <-  "up" # methods are: up, down, shuffle, none, upshuffle
+
 ```
 
 -   rsfMRI: R1S1 mr_pcorr.txt file
@@ -83,12 +86,11 @@ sample_method <-  "shuffle" # methods are: up, down, shuffle, none
 # Load Data
 
 ```{r}
+
 X <- read_csv("../data/X.csv", col_types = cols(.default = col_double()))
 Y <- read_csv("../data/Y.csv", col_types = cols(.default = col_double())) %>% rename(y = x)
 Y %>% group_by(y) %>% count()
-```
 
-```{r}
 # rest data subjects
 rest_subjects = as.data.frame(x  = Sys.glob(paths = "../data/connectivity_matrix/REST1/*")) 
 colnames(rest_subjects) <- c('subject_id')  
@@ -119,117 +121,95 @@ dvs <- read_csv("../data/LL_model2.csv", #read_csv("../data/actr_maxLL.csv",
 
 
 # based on proportion of two labels
-W <- Y
+W <- Y$y
 W[W == 0] <- mean(Y)
 W[W == 1] <- (1-mean(Y))
 
 # normalize maxLL diff
 min_max_norm <- function(x) {
-    (x - min(x)) / (max(x) - min(x))
+  (x - min(x)) / (max(x) - min(x))
 }
+W <- min_max_norm(dvs$LL.diff)
 
-
-# obtain weights based on the absolute value of maxLL diff between model1 and model2
-W <- min_max_norm(abs(dvs$LL.diff))
-```
-
-
-```{r}
 merged_data <- cbind(merge(X, Y, by = "...1")[, -1], W)
+
 ```
 
-## Sampling
+# LASSO PIPELINE
+
 ```{r}
-set.seed(0) # For reproducibility
 
-
-if (sample_method == "shuffle") {
-  sampled_data <- merged_data
-  shuffle_rows <- sample(1:length(rownames(merged_data)))
-  sampled_data$y <- merged_data$y[shuffle_rows]
-  sampled_data$W <- merged_data$W[shuffle_rows]
-} else if (sample_method == "up") {
-  sampled_data <- groupdata2::upsample(
-    data = merged_data, 
-    id_method = "n_rows_c",
-    cat_col = "y")
-} else if (sample_method == "down") {
-  sampled_data <- groupdata2::downsample(
-  merged_data,
-  id_method = "n_rows_c",
-  cat_col = "y")
+sampling <- function(sample_method, merged_data) {
   
-} else if (sample_method == "none") {
-  sampled_data <- merged_data
+  if (sample_method == "shuffle") {
+    sampled_data <- merged_data
+    shuffle_rows <- sample(1:length(rownames(merged_data)))
+    sampled_data$y <- merged_data$y[shuffle_rows]
+    sampled_data$W <- merged_data$W[shuffle_rows]
+  } else if (sample_method == "up") {
+    sampled_data <- groupdata2::upsample(
+      data = merged_data, 
+      id_method = "n_rows_c",
+      cat_col = "y")
+  } else if (sample_method == "up-shuffle") {
+    sampled_data <- groupdata2::upsample(
+      data = merged_data, 
+      id_method = "n_rows_c",
+      cat_col = "y")
+    shuffle_rows <- sample(1:length(rownames(sampled_data)))
+    sampled_data$y <- sampled_data$y[shuffle_rows]
+    sampled_data$W <- sampled_data$W[shuffle_rows]
+  } else if (sample_method == "down") {
+    sampled_data <- groupdata2::downsample(
+      merged_data,
+      id_method = "n_rows_c",
+      cat_col = "y")
+    
+  } else if (sample_method == "none") {
+    sampled_data <- merged_data
+    
+  } else {
+    print("Invalid sample_method. Please choose from: up, down, up-shuffle, shuffle, none")
+  }
   
-} else {
-  print("Invalid sample_method. Please choose from: random, up, up_random, none")
+  return(sampled_data)
+  
 }
 
 
-sampled_data %>% group_by(y) %>% count()
-
-```
-```{r}
-Y.sampled <- sampled_data$y
-W.sampled <- sampled_data$W
-X.sampled <- sampled_data[, !names(sampled_data) %in% c("y", "W")]
-```
-
-## Train/Test Split
-```{r}
-set.seed(0)  # Set seed for reproducibility
-
-indices <- 1:nrow(X.sampled)
-
-# Sample 80% of the indices for training
-train_indices <- sample(indices, 0.8 * length(indices), replace = FALSE)
-
-# Create training and testing sets
-X_train <- X.sampled[train_indices, ]
-Y_train <- Y.sampled[train_indices]
-W_train <- W.sampled[train_indices]
-
-X_test <- X.sampled[-train_indices, ]
-Y_test <- Y.sampled[-train_indices]
-W_test <- W.sampled[-train_indices]
-
-```
-
-> Quality and Characteristics of $X$ and $Y$
-
-Let's do some visualization and analysis of our indepedenent and
-dependet variables, just to ensure there are no obvious problems.
-
-> Collinearity of Connectivity Regressors $X$
-
-The regressors $X$ is certainly multi-collinear; that is a consequence
-of having a large number of predictors $p > n$, which, in turn, is one
-of the reasons why we are using Lasso. Too much collinearity, however,
-could be really bad and push Lasso towards selecting non-optimal
-regressors. To gather a sense of how much collinearity we have, we can
-plot the distribution of correlations among regressors:
-
-```{r}
-corX <- cor(X)
-distCor <- as_vector(corX[lower.tri(corX, diag = F)])
-distTibble <- as_tibble(data.frame(R=distCor))
-
-ggplot(distTibble, aes(x=R)) +
-  geom_histogram(col="white", alpha=0.5, binwidth = 0.05) +
-  theme_pander() +
-  ylab("Number of Correlations") +
-  xlab("Correlation Value") +
-  ggtitle("Distribution of Correlation Values Between Regressors")
-```
-
-# Run LASSO Model
-
-LOO on training data, evaluate on testing data
+save_result_data <- function(data, file_name, n = 0) {
+  data$n <- n
+  write.table(data, file = file_name, sep = ",", 
+              col.names = !file.exists(file_name), 
+              row.names = FALSE, append = TRUE)
+}
 
 
-```{r}
-
+pipeline <- function(merged_data = merged_data, sample_method = "up", save_data = FALSE, n = 0) {
+  
+  # Deal with imbalanced data
+  sampled_data <- sampling(sample_method = sample_method, merged_data = merged_data)
+  
+  
+  Y.sampled <- sampled_data$y
+  W.sampled <- sampled_data$W
+  X.sampled <- sampled_data[, !names(sampled_data) %in% c("y", "W")]
+  
+  
+  # Sample 80% of the indices for training
+  indices <- 1:nrow(X.sampled)
+  train_indices <- sample(indices, 0.8 * length(indices), replace = FALSE)
+  
+  # Create training and testing sets
+  X_train <- X.sampled[train_indices, ]
+  Y_train <- Y.sampled[train_indices]
+  W_train <- W.sampled[train_indices]
+  
+  X_test <- X.sampled[-train_indices, ]
+  Y_test <- Y.sampled[-train_indices]
+  W_test <- W.sampled[-train_indices]
+  
+  
   # LOO CV to find optimal lambda
   fit.cv <- cv.glmnet(y = Y_train,
                       x = as.matrix(X_train),
@@ -241,22 +221,128 @@ LOO on training data, evaluate on testing data
                       nfolds=length(Y_train),
                       grouped = F, 
                       keep = T)
-
+  
   best_model <- glmnet(y = Y_train,
-              x = as.matrix(X_train),
-              alpha=1,
-              lambda = fit.cv$lambda.min,
-              weights = W_train,
-              family = "binomial",
-              type.measure = "class",
-              standardize = T)
+                       x = as.matrix(X_train),
+                       alpha=1,
+                       lambda = fit.cv$lambda.min,
+                       weights = W_train,
+                       family = "binomial",
+                       type.measure = "class",
+                       standardize = T)
+  
+  # evaluation
+  predictions <- predict(best_model, 
+                         newx = as.matrix(X_test),
+                         weights =W_test,
+                         s=fit.cv$lambda.min,
+                         type="class", family = "binomial")%>% as.numeric()
+  Yp <- predict(best_model, 
+                newx = as.matrix(X_test),
+                weights =W_test,
+                s=fit.cv$lambda.min,
+                type="response", family = "binomial")%>% as.numeric()
+  
+  
+  # Compute accuracy
+  accuracy_score <- mean(predictions == Y_test)
+  roc_score <- auc(roc(Y_test, predictions))
+  
+  
+  # Save data
+  beta_table <- data.frame(as.matrix(best_model$beta), row.names = colnames(X)[2:length(X)])
+    
+  prediction_table <- data.frame(Yp = Yp, 
+                                 predictions = predictions, 
+                                 Y = Y_test, 
+                                 row.names = 1:length(Y_test))
+  score_table <- data.frame(lambda = fit.cv$lambda.min, 
+                             accuracy_score = accuracy_score,
+                             roc_score = roc_score)
+  
+  if (save_data) {
+    print("... SAVING DATA ...")
+    
+    save_result_data(data = beta_table, file_name = paste(dest_dir, sample_method, "beta_data.csv", sep = "/"), n = n)
+    save_result_data(data = prediction_table, file_name = paste(dest_dir, sample_method, "prediction_table.csv", sep = "/"), n = n)
+    save_result_data(data = score_table, file_name = paste(dest_dir, sample_method, "score_table.csv", sep = "/"), n = n)
+  }
+  
+  return(list(beta_table = beta_table, score_table = score_table, prediction_table = prediction_table))
+
+}
 
 ```
 
-Now, let's look at the cross-validation error profile.
+
+# RUN MODEL
 
 ```{r}
+set.seed(0)
+result = pipeline(merged_data = merged_data, sample_method = "up", save_data = TRUE)
+
+# Access the returned variables from the list
+print(result$score_table )
+```
+
+
+```{r}
+png(filename = "./figure/fig_lambda.png",  bg = "transparent", 
+    width = 800 , height = 800, 
+    units = "px", res = 150)
 plot(fit.cv)
+```
+
+
+```{r}
+# Access the optimal lambda and its associated MSE value
+optimal_lambda <- fit.cv$lambda.min
+optimal_error_score <- 1-fit.cv$cvm[fit.cv$lambda == optimal_lambda]
+
+# Display the optimal MSE value
+print(paste("Optimal Lambda:", optimal_lambda))
+print(paste("Corresponding Optimal Score:", optimal_error_score))
+
+```
+
+### Training Datasets Betas
+
+
+```{r}
+betas <- as.matrix(best_model$beta) 
+print(paste("[Training dataset] Non-Zero Betas:", sum(betas != 0)))
+
+ggdensity(data = data.frame(betas) %>% filter(s0 != 0), 
+          x="s0", 
+          fill="forestgreen") +
+  labs(x = "Coefficients", y="Values") +
+  ggtitle(paste("Non-Zero Coefficients from Training Datasets", "[ N =",sum(betas != 0), "]"))
+
+```
+
+
+We save betas from training datasets
+
+```{r}
+write.csv(betas, file = "../data/B.csv")
+```
+
+
+
+
+### Full Datasets Betas
+
+
+```{r}
+betas <- as.matrix(best_model.fulldataset$beta) 
+print(paste("[Full dataset] Non-Zero Betas:", sum(betas != 0)))
+
+ggdensity(data = data.frame(betas) %>% filter(s0 != 0), 
+          x="s0", 
+          fill="forestgreen") +
+  labs(x = "Coefficients", y="Values") +
+  ggtitle(paste("Non-Zero Coefficients from Full Datasets", "[ N =",sum(betas != 0), "]"))
+
 ```
 
 
@@ -335,6 +421,9 @@ plot_accuracy <- function(Y, Yp, predictions, accuracy_score) {
 }
 ```
 
+
+> Accuracy
+
 ```{r}
 predictions <- predict(best_model, 
                newx = as.matrix(X_test),
@@ -355,6 +444,9 @@ plot_accuracy(Y=Y_test,
               predictions=predictions,  
               accuracy_score = accuracy_score) 
 ```
+
+
+> ROC
 
 ```{r}
 
