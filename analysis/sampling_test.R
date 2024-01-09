@@ -374,15 +374,29 @@ for (i in 1:n) {
 #####################################
 ### PLOT
 #####################################
-png(filename = "./figure/score_upshuffle_n100.png",  bg = "transparent", 
-    width = 1000, height = 800, 
-    units = "px", res = 150) 
 
-read.csv(paste(dest_dir, "up-shuffle", "score_table.csv", sep = "/")) %>% melt(
+score_table_long <- read_csv(paste(dest_dir, "up", "score_table.csv", sep = "/")) %>% melt(
   id.vars = "n", 
   measure.vars = c("accuracy_score", "roc_score"), 
   variable.name = "score", 
-  value.name = "value") %>%
-  ggboxplot(x = "score", y="value", fill = "score", title = "Testing Score with Up-Shuffle (Repeated N = 100 times)", 
-            xlab = "score type", ylab = "mean score (N = 100)") + ylim(0,1)
+  value.name = "value")
 
+
+
+png(filename = "./figure/score_up_n100.png",  bg = "white", 
+    width = 1000, height = 1000, 
+    units = "px", res = 150) 
+
+score_table_long %>%
+ggplot(aes(x = score, y = value, fill = score)) +
+geom_bar(stat = "summary", fun = "mean", position = "dodge") +
+stat_summary(fun.data = mean_se, geom = "errorbar", width = 0.1, position = position_dodge(width = 0.8)) +
+stat_summary(fun = mean, geom = "text", aes(label = round(..y.., 4)), vjust = -1, position = position_dodge(width = 0.8)) +
+labs(title = "Testing Score with Up (Repeated N = 100 times)",
+    x = "score type", y = "mean score (N = 100)") +
+ylim(0, 1) +
+scale_fill_brewer(palette = "Set2") +  
+theme_pander() +
+guides(fill = FALSE)
+
+dev.off()  
